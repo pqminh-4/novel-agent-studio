@@ -12,6 +12,7 @@ import {
   calculateBriefReadiness,
   getWorkflowSteps,
   toValuePreview,
+  assertJobTransition,
   type Book,
   type BootstrapSnapshot,
   type Chapter,
@@ -24,6 +25,7 @@ import {
   type OutlineVersion,
   type BillingState,
   type CostStatus,
+  type JobStatus,
   type ProviderKind,
   type ProviderRoute,
   type LongContextPacket,
@@ -999,12 +1001,17 @@ export class NovelDatabase {
     this.db.exec('BEGIN IMMEDIATE')
     try {
       const runs = this.db.prepare(`
-        SELECT id FROM workflow_runs WHERE status IN ('queued', 'running')
+        SELECT id, status FROM workflow_runs WHERE status IN ('queued', 'running')
       `).all() as SqlRow[]
       const uncertainRuns = new Set((this.db.prepare(`
         SELECT DISTINCT run_id FROM workflow_steps
         WHERE status = 'running' AND provider <> 'demo' AND billing_state IN ('unknown', 'confirmed')
       `).all() as SqlRow[]).map((row) => String(row.run_id)))
+      for (const run of runs) {
+        const runId = String(run.id)
+        const targetStatus: JobStatus = uncertainRuns.has(runId) ? 'billing_unknown' : 'interrupted'
+        this.assertStoredJobTransition(runId, targetStatus)
+      }
       this.db.prepare(`
         UPDATE workflow_runs SET status = 'interrupted', detail = 'Ứng dụng đã đóng trước khi workflow hoàn tất', updated_at = ?
         WHERE status IN ('queued', 'running')
@@ -1085,6 +1092,9 @@ export class NovelDatabase {
           this.db.prepare(`
             UPDATE workflow_runs SET status = 'waiting_review', progress = 94, detail = 'Các đề xuất đang chờ bạn duyệt', updated_at = ? WHERE id = ?
           `).run(now, runId)
+          const job = this.db.prepare('SELECT status FROM jobs WHERE id = ?').get(runId) as SqlRow | undefined
+          if (!job) throw new Error('Không tìm thấy công việc cho workflow.')
+          this.assertStoredJobTransition(runId, 'waiting_review')
           this.db.prepare(`
             UPDATE jobs SET status = 'waiting_review', progress = 94, detail = 'Đang chờ duyệt artifact', updated_at = ? WHERE id = ?
           `).run(now, runId)
@@ -1120,6 +1130,9 @@ export class NovelDatabase {
         String(step.provider) === 'demo' ? 'not_applicable' : 'unknown',
         now
       )
+      const jobStatusBefore = this.db.prepare(`SELECT status FROM jobs WHERE id = ?`).get(runId) as { status: string } | undefined
+      if (!jobStatusBefore) throw new Error('Không tìm thấy công việc tương ứng với workflow.')
+      this.assertStoredJobTransition(runId, 'preparing')
       this.db.prepare(`
         UPDATE jobs SET role_id = ?, status = 'preparing', detail = ?, started_at = COALESCE(started_at, ?), updated_at = ? WHERE id = ?
       `).run(String(step.role_id), String(step.label), now, now, runId)
@@ -1202,6 +1215,7 @@ export class NovelDatabase {
         UPDATE workflow_attempts SET request_id = ?, http_status = ?, retry_count = ?, retry_at = ?, billing_state = ?
         WHERE id = ? AND status = 'running'
       `).run(event.requestId, event.httpStatus, event.retryCount, event.retryAt, event.billingState, lease.attemptId)
+      this.assertStoredJobTransition(lease.runId, jobStatus)
       this.db.prepare(`UPDATE jobs SET status = ?, detail = ?, updated_at = ? WHERE id = ?`).run(jobStatus, detail, now, lease.runId)
       this.writeWorkflowEvent(lease.runId, `provider.${event.type}`, {
         stepId: lease.stepId,
@@ -1262,9 +1276,7 @@ export class NovelDatabase {
             UPDATE workflow_runs SET status = 'failed', detail = 'Provider đã tính usage nhưng artifact đến sau khi dừng',
               error = 'late_provider_response', updated_at = ? WHERE id = ?
           `).run(now, lease.runId)
-          this.db.prepare(`
-            UPDATE jobs SET status = 'failed', detail = 'Phản hồi đến muộn · artifact không được lưu', updated_at = ? WHERE id = ?
-          `).run(now, lease.runId)
+          this.updateJobStatus(lease.runId, 'failed', 'Phản hồi đến muộn · artifact không được lưu', now)
         }
         this.writeWorkflowEvent(lease.runId, 'provider.late_response', {
           stepId: lease.stepId,
@@ -1314,6 +1326,7 @@ export class NovelDatabase {
       this.db.prepare(`
         UPDATE workflow_runs SET status = ?, current_step = ?, progress = ?, detail = ?, updated_at = ? WHERE id = ?
       `).run(status, next ? Number(next.ordinal) : Number(counts.total), finalProgress, detail, now, lease.runId)
+      this.assertStoredJobTransition(lease.runId, next ? 'preparing' : 'waiting_review')
       this.db.prepare(`
         UPDATE jobs SET role_id = ?, status = ?, progress = ?, detail = ?,
           input_tokens = input_tokens + ?, output_tokens = output_tokens + ?, estimated_cost = estimated_cost + ?,
@@ -1391,6 +1404,7 @@ export class NovelDatabase {
         )
         const detail = uncertain ? 'Chi phí request chưa xác định · cần quyết định thủ công' : 'Workflow cần được thử lại'
         this.db.prepare(`UPDATE workflow_runs SET status = ?, detail = ?, error = ?, updated_at = ? WHERE id = ?`).run(failureStatus, detail, error, now, lease.runId)
+        this.assertStoredJobTransition(lease.runId, failureStatus)
         this.db.prepare(`
           UPDATE jobs SET status = ?, detail = ?,
             input_tokens = input_tokens + ?, output_tokens = output_tokens + ?, estimated_cost = estimated_cost + ?,
@@ -1457,7 +1471,7 @@ export class NovelDatabase {
       this.db.prepare(`
         UPDATE workflow_runs SET status = 'failed', detail = 'Workflow cần được thử lại', error = ?, updated_at = ? WHERE id = ?
       `).run(error, now, runId)
-      this.db.prepare(`UPDATE jobs SET status = 'failed', detail = ?, updated_at = ? WHERE id = ?`).run(error, now, runId)
+      this.updateJobStatus(runId, 'failed', error, now)
       this.writeWorkflowEvent(runId, 'workflow.failed', { stepId: step ? String(step.id) : null, error })
       this.db.exec('COMMIT')
     } catch (cause) {
@@ -1481,6 +1495,7 @@ export class NovelDatabase {
   resumeWorkflow(runId: string): void {
     const run = this.db.prepare('SELECT status FROM workflow_runs WHERE id = ?').get(runId) as SqlRow | undefined
     if (!run || !['paused', 'interrupted'].includes(String(run.status))) throw new Error('Workflow này không ở trạng thái có thể tiếp tục.')
+    this.assertStoredJobTransition(runId, 'queued')
     const now = new Date().toISOString()
     this.db.exec('BEGIN IMMEDIATE')
     try {
@@ -1504,6 +1519,7 @@ export class NovelDatabase {
   retryWorkflow(runId: string): void {
     const run = this.db.prepare('SELECT status, error FROM workflow_runs WHERE id = ?').get(runId) as SqlRow | undefined
     if (!run || !['failed', 'billing_unknown'].includes(String(run.status))) throw new Error('Workflow này không ở trạng thái có thể thử lại.')
+    this.assertStoredJobTransition(runId, 'queued')
     const failedStep = this.db.prepare(`SELECT id FROM workflow_steps WHERE run_id = ? AND status IN ('failed', 'billing_unknown') LIMIT 1`).get(runId)
     if (!failedStep) throw new Error('Workflow đã bị từ chối; hãy tạo một workflow mới để giữ nguyên lịch sử.')
     const now = new Date().toISOString()
@@ -1543,6 +1559,7 @@ export class NovelDatabase {
     this.db.exec('BEGIN IMMEDIATE')
     try {
       if (decision === 'reject') {
+        this.assertStoredJobTransition(runId, 'failed')
         this.db.prepare(`UPDATE workflow_artifacts SET status = 'rejected', reviewed_at = ? WHERE run_id = ? AND status = 'proposal'`).run(now, runId)
         this.db.prepare(`UPDATE workflow_runs SET status = 'failed', detail = 'Đề xuất đã bị từ chối', error = 'review_rejected', updated_at = ? WHERE id = ?`).run(now, runId)
         this.db.prepare(`UPDATE jobs SET status = 'failed', progress = 94, detail = 'Đề xuất đã bị từ chối', updated_at = ? WHERE id = ?`).run(now, runId)
@@ -1552,6 +1569,8 @@ export class NovelDatabase {
         return String(run.book_id)
       }
 
+      this.assertStoredJobTransition(runId, 'committing')
+      this.db.prepare(`UPDATE jobs SET status = 'committing', detail = 'Đang commit các artifact đã duyệt', updated_at = ? WHERE id = ?`).run(now, runId)
       const finalDraft = [...artifacts].reverse().find((artifact) => artifact.kind === 'revised_draft')
         ?? [...artifacts].reverse().find((artifact) => artifact.kind === 'draft')
       if (!finalDraft) throw new Error('Workflow chưa tạo được bản thảo để commit.')
@@ -1622,6 +1641,7 @@ export class NovelDatabase {
         UPDATE workflow_runs SET status = 'completed', progress = 100, detail = 'Đã duyệt và commit an toàn', error = NULL,
           updated_at = ?, completed_at = ? WHERE id = ?
       `).run(now, now, runId)
+      this.assertStoredJobTransition(runId, 'completed')
       this.db.prepare(`
         UPDATE jobs SET status = 'completed', progress = 100, detail = 'Đã duyệt và commit an toàn', updated_at = ? WHERE id = ?
       `).run(now, runId)
@@ -1712,6 +1732,18 @@ export class NovelDatabase {
     }))
   }
 
+  private assertStoredJobTransition(jobId: string, nextStatus: JobStatus): void {
+    const row = this.db.prepare('SELECT status FROM jobs WHERE id = ?').get(jobId) as SqlRow | undefined
+    if (!row) throw new Error('Không tìm thấy công việc tương ứng với workflow.')
+    const currentStatus = String(row.status) as JobStatus
+    if (currentStatus !== nextStatus) assertJobTransition(currentStatus, nextStatus)
+  }
+
+  private updateJobStatus(jobId: string, nextStatus: JobStatus, detail: string, now: string): void {
+    this.assertStoredJobTransition(jobId, nextStatus)
+    this.db.prepare('UPDATE jobs SET status = ?, detail = ?, updated_at = ? WHERE id = ?').run(nextStatus, detail, now, jobId)
+  }
+
   private listWorkflowSteps(runId: string): WorkflowStep[] {
     return (this.db.prepare(`SELECT * FROM workflow_steps WHERE run_id = ? ORDER BY ordinal ASC`).all(runId) as SqlRow[]).map(mapWorkflowStep)
   }
@@ -1750,7 +1782,8 @@ export class NovelDatabase {
         this.db.prepare(`UPDATE workflow_attempts SET status = 'cancelled', error = 'Đã hủy', completed_at = ? WHERE status = 'running' AND step_id IN (SELECT id FROM workflow_steps WHERE run_id = ?)`).run(now, runId)
       }
       this.db.prepare(`UPDATE workflow_runs SET status = ?, detail = ?, updated_at = ?, completed_at = CASE WHEN ? = 'cancelled' THEN ? ELSE completed_at END WHERE id = ?`).run(status, detail, now, status, now, runId)
-      const jobStatus = status === 'paused' ? 'paused' : status
+      const jobStatus = status as JobStatus
+      this.assertStoredJobTransition(runId, jobStatus)
       this.db.prepare(`
         UPDATE jobs SET status = ?, detail = ?, cost_status = CASE WHEN ? = 'billing_unknown' THEN 'unknown' ELSE cost_status END, updated_at = ? WHERE id = ?
       `).run(jobStatus, detail, status, now, runId)

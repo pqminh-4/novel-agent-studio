@@ -143,10 +143,20 @@ export function App(): ReactNode {
     void loadSnapshot()
   }), [loadSnapshot])
 
+  const toastTimeoutsRef = useRef<Map<number, number>>(new Map())
+
   const toast = useCallback((message: string, tone: Toast['tone'] = 'neutral') => {
     const id = Date.now()
     setToasts((items) => [...items, { id, message, tone }])
-    window.setTimeout(() => setToasts((items) => items.filter((item) => item.id !== id)), 3600)
+    const timeoutId = window.setTimeout(() => setToasts((items) => items.filter((item) => item.id !== id)), 3600)
+    toastTimeoutsRef.current.set(id, timeoutId)
+  }, [])
+
+  useEffect(() => {
+    return () => {
+      toastTimeoutsRef.current.forEach((timeoutId) => window.clearTimeout(timeoutId))
+      toastTimeoutsRef.current.clear()
+    }
   }, [])
 
   const adoptSnapshot = useCallback((data: BootstrapSnapshot, chapterId?: string) => {
@@ -614,7 +624,11 @@ function DirectorChat({ snapshot, onSnapshot, onToast }: { snapshot: BootstrapSn
   const endRef = useRef<HTMLDivElement>(null)
 
   useEffect(() => endRef.current?.scrollIntoView({ block: 'end' }), [snapshot.messages.length])
-  useEffect(() => { void window.novelAgent.vault.preferred().then(setActiveProvider) }, [])
+  useEffect(() => {
+    void window.novelAgent.vault.preferred()
+      .then(setActiveProvider)
+      .catch((error) => onToast(error instanceof Error ? error.message : 'Không thể tải provider ưu tiên.', 'danger'))
+  }, [onToast])
 
   const send = async (): Promise<void> => {
     if (!input.trim() || sending) return
@@ -964,9 +978,32 @@ function SettingsStudio({ snapshot, onToast }: { snapshot: BootstrapSnapshot; on
                 <span className={`provider-status ${currentHealth?.ok ? 'provider-status--good' : connection ? 'provider-status--configured' : ''}`}><span />{currentHealth ? currentHealth.ok ? `Sẵn sàng · ${currentHealth.latencyMs} ms` : 'Không phản hồi' : preferred === kind ? 'Đạo diễn · chưa kiểm tra' : connection ? 'Đã cấu hình · chưa kiểm tra' : kind === 'ollama' ? 'Chưa phát hiện' : 'Chưa cấu hình'}</span>
                 <button className="button button--secondary" onClick={() => setEditing(kind)}>{connection ? 'Chỉnh sửa' : 'Kết nối'}</button>
                 {connection && <div className="provider-card__actions">
-                  {preferred !== kind && <button className="text-button" disabled={busy} onClick={async () => { setBusy(true); await window.novelAgent.vault.setPreferred(kind); await refresh(); setBusy(false); onToast(`Đạo diễn sẽ dùng ${providerName(kind)}.`, 'success') }}>Dùng cho Đạo diễn</button>}
+                  {preferred !== kind && <button className="text-button" disabled={busy} onClick={async () => {
+                    setBusy(true)
+                    try {
+                      await window.novelAgent.vault.setPreferred(kind)
+                      await refresh()
+                      onToast(`Đạo diễn sẽ dùng ${providerName(kind)}.`, 'success')
+                    } catch (error) {
+                      onToast(error instanceof Error ? error.message : 'Không thể đặt provider ưu tiên.', 'danger')
+                    } finally {
+                      setBusy(false)
+                    }
+                  }}>Dùng cho Đạo diễn</button>}
                   <button className="text-button" disabled={busy} onClick={async () => { setBusy(true); try { const result = await window.novelAgent.vault.test(kind); setHealth((current) => ({ ...current, [kind]: result })); onToast(`${providerName(kind)}: ${result.message} · ${result.latencyMs} ms`, result.ok ? 'success' : 'danger') } catch (cause) { onToast(cause instanceof Error ? cause.message : 'Không thể kiểm tra provider.', 'danger') } finally { setBusy(false) } }}>Kiểm tra</button>
-                  <button className="text-button text-button--danger" disabled={busy} onClick={async () => { if (!window.confirm(`Xóa kết nối ${providerName(kind)} khỏi máy này?`)) return; setBusy(true); await window.novelAgent.vault.remove(kind); await refresh(); setBusy(false); onToast(`Đã xóa kết nối ${providerName(kind)}.`, 'success') }}>Xóa</button>
+                  <button className="text-button text-button--danger" disabled={busy} onClick={async () => {
+                    if (!window.confirm(`Xóa kết nối ${providerName(kind)} khỏi máy này?`)) return
+                    setBusy(true)
+                    try {
+                      await window.novelAgent.vault.remove(kind)
+                      await refresh()
+                      onToast(`Đã xóa kết nối ${providerName(kind)}.`, 'success')
+                    } catch (error) {
+                      onToast(error instanceof Error ? error.message : 'Không thể xóa kết nối.', 'danger')
+                    } finally {
+                      setBusy(false)
+                    }
+                  }}>Xóa</button>
                 </div>}
               </article>
             )

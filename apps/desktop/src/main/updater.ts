@@ -1,7 +1,11 @@
-import { autoUpdater } from 'electron-updater'
+import updaterPackage from 'electron-updater'
 import { app, dialog, type BrowserWindow } from 'electron'
 import type { UpdateState } from '@core/index'
 import type { Logger } from './logger'
+
+// electron-updater phát hành dưới dạng CommonJS. Khi main process được bundle thành
+// ESM, named import sẽ lỗi ngay lúc khởi động trên bản đã cài.
+const { autoUpdater } = updaterPackage
 
 /**
  * Auto-update qua GitHub Releases.

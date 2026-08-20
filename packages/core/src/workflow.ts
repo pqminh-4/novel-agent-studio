@@ -56,13 +56,13 @@ export type JobStatus =
   | 'billing_unknown'
 
 const VALID_TRANSITIONS: Record<JobStatus, JobStatus[]> = {
-  queued: ['preparing', 'cancelled', 'paused'],
-  preparing: ['submitting', 'failed', 'cancelled', 'paused'],
-  submitting: ['streaming', 'validating', 'failed', 'billing_unknown', 'cancel_requested', 'paused'],
+  queued: ['preparing', 'cancelled', 'paused', 'interrupted', 'billing_unknown'],
+  preparing: ['submitting', 'waiting_review', 'failed', 'cancelled', 'paused', 'interrupted', 'billing_unknown'],
+  submitting: ['streaming', 'validating', 'failed', 'billing_unknown', 'cancel_requested', 'paused', 'interrupted'],
   streaming: ['validating', 'failed', 'billing_unknown', 'cancel_requested', 'interrupted', 'paused'],
-  validating: ['waiting_review', 'committing', 'failed', 'paused'],
-  waiting_review: ['committing', 'cancelled', 'paused'],
-  committing: ['completed', 'failed', 'interrupted'],
+  validating: ['preparing', 'waiting_review', 'committing', 'failed', 'paused', 'interrupted'],
+  waiting_review: ['committing', 'completed', 'failed', 'cancelled', 'paused'],
+  committing: ['completed', 'failed', 'interrupted', 'billing_unknown'],
   completed: [],
   paused: ['queued', 'cancelled'],
   cancel_requested: ['cancelled', 'billing_unknown'],

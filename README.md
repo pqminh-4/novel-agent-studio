@@ -55,10 +55,24 @@ pnpm package
 
 ## Cập nhật, log và chẩn đoán
 
-Auto-update dùng `electron-updater` với GitHub Releases. Trước khi phát hành, hãy đặt `build.publish[0].owner` trong `package.json` thành chủ repo thật (hiện đang là `CHANGE_ME`) và phát hành bằng `electron-builder --publish always` với `GH_TOKEN` trong môi trường.
+`pnpm package` chỉ tạo installer cục bộ để kiểm tra. Auto-update dùng `electron-updater` với GitHub Releases của repository [`pqminh-4/novel-agent-studio`](https://github.com/pqminh-4/novel-agent-studio). Workflow GitHub Actions tại [`.github/workflows/release.yml`](.github/workflows/release.yml) sẽ kiểm tra tag, chạy quality gates và publish release khi có tag `vX.Y.Z` được push. Không cần đặt `CHANGE_ME` trong `package.json`; publisher đã trỏ tới repository này.
 
-- Ứng dụng kiểm tra cập nhật trong nền sau khi cửa sổ đã hiện, và không bao giờ tự tải hoặc tự cài.
-- Nếu còn workflow AI đang chạy, hộp thoại xác nhận nêu rõ việc khởi động lại sẽ đánh dấu chúng là gián đoạn.
+Quy trình phát hành:
+
+```powershell
+# Tăng version trong package.json và cập nhật lockfile nếu cần
+pnpm install --lockfile-only
+pnpm typecheck
+pnpm test
+
+# Commit thay đổi rồi tạo tag đúng package.json.version
+git tag v0.1.6
+git push origin master
+git push origin v0.1.6
+```
+
+Có thể chạy lại release cho một tag đã tồn tại từ GitHub Actions bằng `workflow_dispatch`. Workflow dùng `GITHUB_TOKEN`, không cần lưu token trong repository. Mỗi release phải chứa installer NSIS x64, `latest.yml`, blockmap, SBOM CycloneDX và `SHA256SUMS.txt`; đây là các file cần thiết để `electron-updater` kiểm tra và tải cập nhật. Ứng dụng chỉ kiểm tra trong bản đã đóng gói, không tự tải hoặc tự cài, và sẽ hỏi lại trước khi khởi động lại khi còn workflow đang chạy.
+
 - Log nằm ở `%APPDATA%/Novel Agent Studio/logs`, xoay vòng ở 2 MB và giữ tối đa 5 file. Log được che các chuỗi giống khoá bí mật và không được gửi tới bất kỳ máy chủ nào.
 - `crashReporter` chỉ ghi dump cục bộ (`uploadToServer: false`).
 

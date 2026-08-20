@@ -12,7 +12,16 @@ export default defineConfig({
     environment: 'node',
     include: ['tests/**/*.test.ts'],
     coverage: {
-      reporter: ['text', 'html']
+      provider: 'v8',
+      include: ['packages/{core,infrastructure}/src/**/*.ts'],
+      exclude: ['packages/{core,infrastructure}/src/index.ts'],
+      reporter: ['text', 'html'],
+      thresholds: {
+        lines: 70,
+        functions: 65,
+        branches: 60,
+        statements: 70
+      }
     }
   }
 })
