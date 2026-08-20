@@ -2709,6 +2709,21 @@ select:focus-visible,
   border-color: color-mix(in srgb, var(--danger) 26%, transparent);
 }
 
+.update-progress {
+  height: 5px;
+  margin: 0 0 10px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+  overflow: hidden;
+}
+
+.update-progress > span {
+  display: block;
+  height: 100%;
+  background: var(--accent);
+  transition: width 200ms ease;
+}
+
 .workflow-controls {
   display: flex;
   justify-content: flex-end;

@@ -53,6 +53,15 @@ pnpm package
 - Không đưa khóa bí mật vào bản export, log hoặc repository.
 - Nếu provider đã chọn không phản hồi, Đạo diễn thông báo và quay về chế độ cục bộ để không làm gián đoạn dữ liệu.
 
+## Cập nhật, log và chẩn đoán
+
+Auto-update dùng `electron-updater` với GitHub Releases. Trước khi phát hành, hãy đặt `build.publish[0].owner` trong `package.json` thành chủ repo thật (hiện đang là `CHANGE_ME`) và phát hành bằng `electron-builder --publish always` với `GH_TOKEN` trong môi trường.
+
+- Ứng dụng kiểm tra cập nhật trong nền sau khi cửa sổ đã hiện, và không bao giờ tự tải hoặc tự cài.
+- Nếu còn workflow AI đang chạy, hộp thoại xác nhận nêu rõ việc khởi động lại sẽ đánh dấu chúng là gián đoạn.
+- Log nằm ở `%APPDATA%/Novel Agent Studio/logs`, xoay vòng ở 2 MB và giữ tối đa 5 file. Log được che các chuỗi giống khoá bí mật và không được gửi tới bất kỳ máy chủ nào.
+- `crashReporter` chỉ ghi dump cục bộ (`uploadToServer: false`).
+
 ## Trạng thái ký mã
 
 Installer phát triển hiện chưa có chứng thư Authenticode. Windows SmartScreen có thể cảnh báo cho tới khi binary được ký bằng chứng thư tin cậy; không được coi log `signtool.exe` của electron-builder là bằng chứng đã ký.

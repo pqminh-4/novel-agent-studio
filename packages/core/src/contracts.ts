@@ -300,6 +300,21 @@ export const RecoveryStatusSchema = z.object({
   recoveryPoints: z.array(RecoveryPointSchema)
 })
 
+/**
+ * Trạng thái auto-update chia sẻ giữa main process và renderer.
+ * Đặt trong core để renderer không phải import từ thư mục main.
+ */
+export const UpdateStateSchema = z.discriminatedUnion('status', [
+  z.object({ status: z.literal('idle') }),
+  z.object({ status: z.literal('checking') }),
+  z.object({ status: z.literal('available'), version: z.string(), notes: z.string().nullable() }),
+  z.object({ status: z.literal('downloading'), version: z.string(), percent: z.number().min(0).max(100) }),
+  z.object({ status: z.literal('downloaded'), version: z.string() }),
+  z.object({ status: z.literal('current'), version: z.string() }),
+  z.object({ status: z.literal('error'), message: z.string() }),
+  z.object({ status: z.literal('unsupported'), message: z.string() })
+])
+
 export const RecoveryActionResultSchema = z.object({
   path: z.string(),
   recoveryPointPath: z.string().nullable(),
@@ -488,6 +503,7 @@ export type RecoveryPoint = z.infer<typeof RecoveryPointSchema>
 export type RecoveryReason = z.infer<typeof RecoveryReasonSchema>
 export type RecoveryStatus = z.infer<typeof RecoveryStatusSchema>
 export type RecoveryActionResult = z.infer<typeof RecoveryActionResultSchema>
+export type UpdateState = z.infer<typeof UpdateStateSchema>
 export type ProjectArchiveManifest = z.infer<typeof ProjectArchiveManifestSchema>
 export type BillingState = z.infer<typeof BillingStateSchema>
 export type CostStatus = z.infer<typeof CostStatusSchema>

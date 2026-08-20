@@ -67,6 +67,7 @@ import {
   type RecoveryStatus,
   type RoleProfile,
   type Series,
+  type UpdateState,
   type WorkflowArtifact,
   type WorkflowPreset,
   type WorkflowRun
@@ -1040,6 +1041,7 @@ function SettingsStudio({ snapshot, onToast }: { snapshot: BootstrapSnapshot; on
         </div>
         {(dataStatus?.recoveryPoints.length ?? 0) > 0 && <div className="recovery-points"><div><span>RECOVERY POINT GẦN NHẤT</span><small>Được tạo tự động trước migration hoặc restore</small></div>{dataStatus?.recoveryPoints.slice(0, 3).map((point) => <div className="recovery-point" key={point.path}><span data-integrity={point.integrity} /><div><strong>{point.kind === 'migration' ? 'Trước migration' : 'Trước restore'}</strong><small>{new Date(point.createdAt).toLocaleString('vi-VN')} · {formatBytes(point.sizeBytes)} · {point.schemaVersion ? `schema v${point.schemaVersion}` : 'không đọc được schema'}</small></div></div>)}</div>}
       </section>
+      <UpdateSettings onToast={onToast} />
       <section className="settings-section two-column-settings">
         <div className="setting-card"><div className="setting-card__icon"><Wifi size={18} /></div><div><h3>Nghiên cứu web</h3><p>Provider-native + Brave Search fallback</p><small>Fact từ web luôn cần nguồn trước khi vào canon.</small></div><span className="chip">Chưa cấu hình Brave</span></div>
         <div className="setting-card"><div className="setting-card__icon"><ShieldCheck size={18} /></div><div><h3>Runtime cô lập</h3><p>Renderer sandbox · utility process</p><small>Restore chỉ chạy sau khi utility process đã đóng SQLite.</small></div><span className="chip chip--good">Đã bật</span></div>
@@ -1522,6 +1524,91 @@ function RecoverySafeMode({ status, onRefresh }: { status: RecoveryStatus; onRef
       <footer>Safe Mode không giải mã hoặc xuất API key.</footer>
     </div>
   )
+}
+
+function UpdateSettings({ onToast }: { onToast: (message: string, tone?: Toast['tone']) => void }): ReactNode {
+  const [state, setState] = useState<UpdateState>({ status: 'idle' })
+  const [busy, setBusy] = useState(false)
+
+  useEffect(() => {
+    void window.novelAgent.updater.state().then(setState).catch(() => undefined)
+    return window.novelAgent.updater.onState(setState)
+  }, [])
+
+  const run = async (action: 'check' | 'download' | 'install'): Promise<void> => {
+    setBusy(true)
+    try {
+      if (action === 'check') {
+        const result = await window.novelAgent.updater.check()
+        if (result.status === 'current') onToast('Bạn đang dùng phiên bản mới nhất.', 'success')
+        if (result.status === 'unsupported') onToast(result.message)
+      }
+      if (action === 'download') await window.novelAgent.updater.download()
+      if (action === 'install') await window.novelAgent.updater.install()
+    } catch (cause) {
+      onToast(cause instanceof Error ? cause.message : 'Không thể thực hiện cập nhật.', 'danger')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  return (
+    <section className="settings-section">
+      <div className="settings-section__head">
+        <div><h3>Cập nhật và chẩn đoán</h3><p>Bản cập nhật được tải từ GitHub Releases và chỉ cài khi bạn đồng ý. Log chỉ nằm trên máy này.</p></div>
+        <span className="chip">{describeUpdateState(state)}</span>
+      </div>
+      {state.status === 'downloading' ? (
+        <div className="update-progress" role="progressbar" aria-valuenow={state.percent} aria-valuemin={0} aria-valuemax={100} aria-label="Tiến độ tải bản cập nhật">
+          <span style={{ width: `${state.percent}%` }} />
+        </div>
+      ) : null}
+      {state.status === 'error' ? <p className="settings-note"><CircleAlert size={14} /> {state.message}</p> : null}
+      {state.status === 'available' && state.notes ? <p className="settings-note">{state.notes.slice(0, 400)}</p> : null}
+      <div className="data-actions">
+        <button className="data-action" disabled={busy || state.status === 'downloading'} onClick={() => void run('check')}>
+          <span><RefreshCw size={18} /></span>
+          <div><strong>Kiểm tra cập nhật</strong><small>So sánh với bản phát hành mới nhất</small></div>
+          {busy && state.status === 'checking' ? <LoaderCircle size={15} className="spin" /> : <ChevronRight size={15} />}
+        </button>
+        {state.status === 'available' ? (
+          <button className="data-action" disabled={busy} onClick={() => void run('download')}>
+            <span><Download size={18} /></span>
+            <div><strong>Tải bản {state.version}</strong><small>Tải trước, chưa cài đặt</small></div>
+            <ChevronRight size={15} />
+          </button>
+        ) : null}
+        {state.status === 'downloaded' ? (
+          <button className="data-action data-action--warning" disabled={busy} onClick={() => void run('install')}>
+            <span><RotateCcw size={18} /></span>
+            <div><strong>Cài bản {state.version} và khởi động lại</strong><small>Workflow đang chạy sẽ được đánh dấu gián đoạn</small></div>
+            <ChevronRight size={15} />
+          </button>
+        ) : null}
+        <button className="data-action" disabled={busy} onClick={async () => {
+          const result = await window.novelAgent.diagnostics.openLogs()
+          if (result.error) onToast(`Không mở được thư mục log: ${result.error}`, 'danger')
+        }}>
+          <span><FileText size={18} /></span>
+          <div><strong>Mở thư mục log</strong><small>Log cục bộ, có che khóa bí mật, không tự gửi đi</small></div>
+          <ChevronRight size={15} />
+        </button>
+      </div>
+    </section>
+  )
+}
+
+function describeUpdateState(state: UpdateState): string {
+  switch (state.status) {
+    case 'checking': return 'Đang kiểm tra'
+    case 'available': return `Có bản ${state.version}`
+    case 'downloading': return `Đang tải ${state.percent}%`
+    case 'downloaded': return `Sẵn sàng cài ${state.version}`
+    case 'current': return `Mới nhất · v${state.version}`
+    case 'error': return 'Kiểm tra thất bại'
+    case 'unsupported': return 'Chỉ có ở bản đóng gói'
+    default: return 'Chưa kiểm tra'
+  }
 }
 
 function LoadingScreen(): ReactNode {

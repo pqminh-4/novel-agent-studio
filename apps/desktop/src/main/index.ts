@@ -5,6 +5,7 @@ import { pathToFileURL } from 'node:url'
 import {
   app,
   BrowserWindow,
+  crashReporter,
   dialog,
   ipcMain,
   net,
@@ -17,6 +18,8 @@ import { RecoveryManager, type WorkflowProviderRouteSecret } from '@infra/index'
 import { RuntimeBridge } from './runtime-bridge'
 import { CredentialVault, type ProviderConnectionInput } from './vault'
 import { exportBook, suggestFileName, type ExportFormat } from './exporters'
+import { Logger } from './logger'
+import { AppUpdater } from './updater'
 
 protocol.registerSchemesAsPrivileged([
   {
@@ -35,6 +38,8 @@ let mainWindow: BrowserWindow | null = null
 let runtime: RuntimeBridge | null = null
 let vault: CredentialVault
 let recovery: RecoveryManager
+let logger: Logger
+let updater: AppUpdater
 
 const RUNTIME_CHANNELS = new Set([
   'app:bootstrap',
@@ -65,6 +70,15 @@ const RUNTIME_CHANNELS = new Set([
 void app.whenReady().then(async () => {
   const userData = app.getPath('userData')
   const dataDirectory = join(userData, 'data')
+  logger = new Logger(join(userData, 'logs'), app.isPackaged ? 'info' : 'debug')
+  logger.info('Ứng dụng khởi động', {
+    version: app.getVersion(),
+    electron: process.versions.electron,
+    packaged: app.isPackaged
+  })
+  installProcessHandlers()
+  // crashReporter chỉ ghi dump cục bộ, không gửi đi đâu: uploadToServer = false.
+  crashReporter.start({ submitURL: '', uploadToServer: false, compress: true })
   recovery = new RecoveryManager(dataDirectory, app.getVersion())
   vault = new CredentialVault(join(userData, 'vault', 'connections.json'))
   const recoveryStatus = recovery.getStatus()
@@ -78,15 +92,37 @@ void app.whenReady().then(async () => {
       recovery.markFailure('runtime_startup', error instanceof Error ? error.message : 'Application Runtime không thể khởi động.')
     }
   }
+  updater = new AppUpdater(logger)
   registerProtocol()
   registerSecurityPolicy()
   registerIpc()
   createWindow()
 }).catch((error) => {
-  console.error(`[startup] ${sanitizeDiagnostic(error instanceof Error ? error.message : 'Lỗi không xác định')}`)
+  const message = sanitizeDiagnostic(error instanceof Error ? error.message : 'Lỗi không xác định')
+  logger?.error('Khởi động thất bại', { message })
+  if (!logger) console.error(`[startup] ${message}`)
   dialog.showErrorBox('Không thể khởi động Novel Agent Studio', 'Application Runtime không thể mở. Dữ liệu của bạn chưa bị thay đổi.')
   app.quit()
 })
+
+/**
+ * Main process không có handler toàn cục nào: một exception ngoài luồng sẽ đóng
+ * app mà không để lại dấu vết. Ta ghi log rồi vẫn để Electron xử lý như trước.
+ */
+function installProcessHandlers(): void {
+  process.on('uncaughtException', (error) => {
+    logger.error('uncaughtException trong main process', {
+      message: error.message,
+      stack: error.stack?.slice(0, 4_000)
+    })
+  })
+  process.on('unhandledRejection', (reason) => {
+    logger.error('unhandledRejection trong main process', {
+      message: reason instanceof Error ? reason.message : String(reason),
+      stack: reason instanceof Error ? reason.stack?.slice(0, 4_000) : undefined
+    })
+  })
+}
 
 app.on('window-all-closed', () => {
   void runtime?.stop()
@@ -120,7 +156,13 @@ function createWindow(): void {
     }
   })
   mainWindow = window
-  window.once('ready-to-show', () => window.show())
+  updater.attach(window, hasRunningWorkflow)
+  window.once('ready-to-show', () => {
+    window.show()
+    // Kiểm tra nền sau khi UI đã hiện, không chặn khởi động và không quấy rầy
+    // nếu mạng không sẵn sàng.
+    setTimeout(() => void updater.check({ silent: true }), 4_000)
+  })
   window.on('closed', () => {
     if (mainWindow === window) mainWindow = null
   })
@@ -143,14 +185,23 @@ function createWindow(): void {
     const safeMessage = sanitizeDiagnostic(details.message ?? message)
     const safeSource = sanitizeDiagnostic(details.sourceId ?? sourceId, 180)
     const safeLevel = details.level ?? (level === 3 ? 'error' : 'warning')
-    console.error(`[renderer:${safeLevel}] ${safeMessage} (${safeSource}:${details.lineNumber ?? line})`)
+    logger.warn('Renderer console', {
+      level: safeLevel,
+      message: safeMessage,
+      source: safeSource,
+      line: details.lineNumber ?? line
+    })
   })
   window.webContents.on('preload-error', (_event, preloadPath, error) => {
-    console.error(`[preload-error] ${sanitizeDiagnostic(error.message)} (${sanitizeDiagnostic(preloadPath, 180)})`)
+    logger.error('Preload lỗi', {
+      message: sanitizeDiagnostic(error.message),
+      preload: sanitizeDiagnostic(preloadPath, 180)
+    })
   })
   window.webContents.on('render-process-gone', (_event, details) => {
-    console.error(`[renderer-gone] reason=${details.reason} exitCode=${details.exitCode}`)
+    logger.error('Renderer process đã dừng', { reason: details.reason, exitCode: details.exitCode })
   })
+  window.webContents.on('unresponsive', () => logger.warn('Renderer không phản hồi'))
 
   if (!app.isPackaged && process.env.ELECTRON_RENDERER_URL) {
     void window.loadURL(process.env.ELECTRON_RENDERER_URL)
@@ -334,6 +385,29 @@ function registerIpc(): void {
     validateSender(event.senderFrame?.url ?? '')
     scheduleRelaunch()
   })
+  ipcMain.handle('updater:state', (event) => {
+    validateSender(event.senderFrame?.url ?? '')
+    return updater.getState()
+  })
+  ipcMain.handle('updater:check', async (event) => {
+    validateSender(event.senderFrame?.url ?? '')
+    return updater.check({ silent: false })
+  })
+  ipcMain.handle('updater:download', async (event) => {
+    validateSender(event.senderFrame?.url ?? '')
+    return updater.download()
+  })
+  ipcMain.handle('updater:install', async (event) => {
+    validateSender(event.senderFrame?.url ?? '')
+    await updater.installAndRestart()
+  })
+  ipcMain.handle('diagnostics:open-logs', async (event) => {
+    validateSender(event.senderFrame?.url ?? '')
+    // Mở thư mục log để người dùng tự gửi khi cần hỗ trợ; log không bao giờ
+    // được tải lên bất kỳ máy chủ nào.
+    const result = await shell.openPath(join(app.getPath('userData'), 'logs'))
+    return { error: result || null, path: join(app.getPath('userData'), 'logs') }
+  })
   ipcMain.handle('export:book', async (event, format: ExportFormat) => {
     validateSender(event.senderFrame?.url ?? '')
     const snapshot = await requireRuntime().invoke<BootstrapSnapshot>('app:bootstrap')
@@ -353,6 +427,17 @@ function requireRuntime(): RuntimeBridge {
   return runtime
 }
 
+/** Dùng để hoãn khởi động lại khi cài cập nhật giữa lúc workflow đang chạy. */
+async function hasRunningWorkflow(): Promise<boolean> {
+  if (!runtime || runtime.isFatal) return false
+  try {
+    const snapshot = await runtime.invoke<BootstrapSnapshot>('app:bootstrap')
+    return snapshot.workflowRuns.some((run) => run.status === 'queued' || run.status === 'running')
+  } catch {
+    return false
+  }
+}
+
 /**
  * Tạo RuntimeBridge có xử lý crash-loop: khi runtime chết quá ngưỡng trong một
  * cửa sổ thời gian, ta ghi nhận lý do vào recovery và đưa ứng dụng vào Safe Mode
@@ -360,11 +445,14 @@ function requireRuntime(): RuntimeBridge {
  */
 function createRuntimeBridge(dataDirectory: string): RuntimeBridge {
   return new RuntimeBridge(dataDirectory, (reason) => {
-    console.error(`[runtime-fatal] ${sanitizeDiagnostic(reason.message)}`)
+    logger.error('Runtime vào trạng thái không thể phục hồi', {
+      message: sanitizeDiagnostic(reason.message),
+      restarts: reason.restarts
+    })
     recovery.markFailure('runtime_startup', reason.message)
     runtime = null
     mainWindow?.webContents.send('runtime:fatal', { message: reason.message, restarts: reason.restarts })
-  })
+  }, logger)
 }
 
 async function confirmRestore(inspection: BackupInspection, sourceLabel: string): Promise<boolean> {

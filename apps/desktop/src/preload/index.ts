@@ -29,7 +29,21 @@ const api = {
       return () => ipcRenderer.removeListener('runtime:fatal', handler)
     }
   },
-  exportBook: (format: 'markdown' | 'docx' | 'epub' | 'pdf'): Promise<{ path: string } | null> => ipcRenderer.invoke('export:book', format)
+  exportBook: (format: 'markdown' | 'docx' | 'epub' | 'pdf'): Promise<{ path: string } | null> => ipcRenderer.invoke('export:book', format),
+  updater: {
+    state: <T>(): Promise<T> => ipcRenderer.invoke('updater:state'),
+    check: <T>(): Promise<T> => ipcRenderer.invoke('updater:check'),
+    download: <T>(): Promise<T> => ipcRenderer.invoke('updater:download'),
+    install: (): Promise<void> => ipcRenderer.invoke('updater:install'),
+    onState: (listener: (state: unknown) => void): (() => void) => {
+      const handler = (_event: unknown, state: unknown): void => listener(state)
+      ipcRenderer.on('updater:state', handler)
+      return () => ipcRenderer.removeListener('updater:state', handler)
+    }
+  },
+  diagnostics: {
+    openLogs: <T>(): Promise<T> => ipcRenderer.invoke('diagnostics:open-logs')
+  }
 }
 
 contextBridge.exposeInMainWorld('novelAgent', api)

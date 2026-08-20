@@ -4,7 +4,8 @@ import type {
   ProviderKind,
   ProviderRoute,
   RecoveryActionResult,
-  RecoveryStatus
+  RecoveryStatus,
+  UpdateState
 } from '@core/index'
 
 export type NovelAgentApi = {
@@ -32,6 +33,17 @@ export type NovelAgentApi = {
     onFatal(listener: (reason: { message: string; restarts: number }) => void): () => void
   }
   exportBook(format: 'markdown' | 'docx' | 'epub' | 'pdf'): Promise<{ path: string } | null>
+  updater: {
+    state(): Promise<UpdateState>
+    check(): Promise<UpdateState>
+    download(): Promise<UpdateState>
+    install(): Promise<void>
+    /** Đăng ký nhận trạng thái cập nhật; trả về hàm huỷ đăng ký. */
+    onState(listener: (state: UpdateState) => void): () => void
+  }
+  diagnostics: {
+    openLogs(): Promise<{ error: string | null; path: string }>
+  }
 }
 
 declare global {

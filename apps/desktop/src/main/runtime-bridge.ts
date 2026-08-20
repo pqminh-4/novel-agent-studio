@@ -16,6 +16,12 @@ export type RuntimeFatalReason = {
   restarts: number
 }
 
+export type RuntimeLogSink = {
+  info(message: string, context?: Record<string, unknown>): void
+  warn(message: string, context?: Record<string, unknown>): void
+  error(message: string, context?: Record<string, unknown>): void
+}
+
 export class RuntimeBridge {
   private child: UtilityProcess | null = null
   private readonly pending = new Map<string, PendingRequest>()
@@ -31,7 +37,8 @@ export class RuntimeBridge {
 
   constructor(
     private readonly dataDirectory: string,
-    private readonly onFatal?: (reason: RuntimeFatalReason) => void
+    private readonly onFatal?: (reason: RuntimeFatalReason) => void,
+    private readonly log?: RuntimeLogSink
   ) {}
 
   get isFatal(): boolean {
@@ -97,14 +104,22 @@ export class RuntimeBridge {
         this.rejectAll(this.fatal ?? error)
       })
       child.on('spawn', () => {
-        child.stdout?.on('data', (chunk) => console.info(`[runtime] ${String(chunk).trim()}`))
-        child.stderr?.on('data', (chunk) => console.error(`[runtime] ${String(chunk).trim()}`))
+        child.stdout?.on('data', (chunk) => this.emit('info', String(chunk).trim()))
+        child.stderr?.on('data', (chunk) => this.emit('error', String(chunk).trim()))
       })
     })
   }
 
+  private emit(level: 'info' | 'warn' | 'error', message: string): void {
+    if (!message) return
+    if (this.log) this.log[level]('Application Runtime', { output: message })
+    else if (level === 'info') console.info(`[runtime] ${message}`)
+    else console.error(`[runtime] ${message}`)
+  }
+
   private recordCrash(code: number): void {
     const { restarts, exhausted } = this.restarts.recordCrash()
+    this.log?.warn('Application Runtime dừng ngoài dự kiến', { code, restarts })
     if (!exhausted) return
     this.fatal = new Error(describeCrashLoop(restarts, code))
     this.onFatal?.({ message: this.fatal.message, restarts })
@@ -145,7 +160,7 @@ export class RuntimeBridge {
       ])
       await Promise.race([exited, new Promise((resolve) => setTimeout(resolve, 2_500))])
     } catch (error) {
-      console.error(`[runtime-stop] ${error instanceof Error ? error.message : 'Không thể đóng runtime sạch.'}`)
+      this.emit('warn', error instanceof Error ? error.message : 'Không thể đóng runtime sạch.')
     }
     if (this.child === child) child.kill()
     this.child = null
