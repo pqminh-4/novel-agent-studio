@@ -20,7 +20,14 @@ const api = {
   },
   recovery: {
     status: (): Promise<unknown> => ipcRenderer.invoke('recovery:status'),
-    restart: (): Promise<void> => ipcRenderer.invoke('recovery:restart')
+    restart: (): Promise<void> => ipcRenderer.invoke('recovery:restart'),
+    // Main process phát tín hiệu khi runtime chết quá ngưỡng và ngừng tự khởi
+    // động lại. Chỉ truyền dữ liệu thuần, không expose ipcRenderer cho renderer.
+    onFatal: (listener: (reason: { message: string; restarts: number }) => void): (() => void) => {
+      const handler = (_event: unknown, reason: { message: string; restarts: number }): void => listener(reason)
+      ipcRenderer.on('runtime:fatal', handler)
+      return () => ipcRenderer.removeListener('runtime:fatal', handler)
+    }
   },
   exportBook: (format: 'markdown' | 'docx' | 'epub' | 'pdf'): Promise<{ path: string } | null> => ipcRenderer.invoke('export:book', format)
 }

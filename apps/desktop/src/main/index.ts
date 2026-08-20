@@ -70,7 +70,7 @@ void app.whenReady().then(async () => {
   const recoveryStatus = recovery.getStatus()
   if (!recoveryStatus.safeMode) {
     try {
-      runtime = new RuntimeBridge(dataDirectory)
+      runtime = createRuntimeBridge(dataDirectory)
       await runtime.start()
     } catch (error) {
       await runtime?.stop()
@@ -353,6 +353,20 @@ function requireRuntime(): RuntimeBridge {
   return runtime
 }
 
+/**
+ * Tạo RuntimeBridge có xử lý crash-loop: khi runtime chết quá ngưỡng trong một
+ * cửa sổ thời gian, ta ghi nhận lý do vào recovery và đưa ứng dụng vào Safe Mode
+ * thay vì fork lại im lặng mãi.
+ */
+function createRuntimeBridge(dataDirectory: string): RuntimeBridge {
+  return new RuntimeBridge(dataDirectory, (reason) => {
+    console.error(`[runtime-fatal] ${sanitizeDiagnostic(reason.message)}`)
+    recovery.markFailure('runtime_startup', reason.message)
+    runtime = null
+    mainWindow?.webContents.send('runtime:fatal', { message: reason.message, restarts: reason.restarts })
+  })
+}
+
 async function confirmRestore(inspection: BackupInspection, sourceLabel: string): Promise<boolean> {
   const result = await dialog.showMessageBox(mainWindow!, {
     type: 'warning',
@@ -383,7 +397,7 @@ async function applyDatabaseRestore(sourcePath: string, inspection: BackupInspec
     try {
       const status = recovery.getStatus()
       if (!status.safeMode) {
-        runtime = new RuntimeBridge(recovery.dataDirectory)
+        runtime = createRuntimeBridge(recovery.dataDirectory)
         await runtime.start()
       }
     } catch (restartError) {

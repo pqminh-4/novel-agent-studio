@@ -104,6 +104,7 @@ export function App(): ReactNode {
   const [projectManagerOpen, setProjectManagerOpen] = useState(false)
   const [chapterEditor, setChapterEditor] = useState<Chapter | 'new' | null>(null)
   const [workflowCenterOpen, setWorkflowCenterOpen] = useState(false)
+  const [runtimeFatal, setRuntimeFatal] = useState<string | null>(null)
   const workflowPollErrorNotified = useRef(false)
 
   const loadSnapshot = useCallback(async () => {
@@ -133,6 +134,13 @@ export function App(): ReactNode {
   useEffect(() => {
     document.documentElement.dataset.theme = theme
   }, [theme])
+
+  // Runtime chết quá ngưỡng: dừng mọi thao tác nghiệp vụ và chỉ để lại đường
+  // khôi phục, thay vì để renderer tiếp tục gọi vào một runtime đã chết.
+  useEffect(() => window.novelAgent.recovery.onFatal((reason) => {
+    setRuntimeFatal(reason.message)
+    void loadSnapshot()
+  }), [loadSnapshot])
 
   const toast = useCallback((message: string, tone: Toast['tone'] = 'neutral') => {
     const id = Date.now()
@@ -183,6 +191,7 @@ export function App(): ReactNode {
 
   if (loading) return <LoadingScreen />
   if (recoveryStatus?.safeMode) return <RecoverySafeMode status={recoveryStatus} onRefresh={loadSnapshot} />
+  if (runtimeFatal) return <ErrorScreen message={runtimeFatal} onRetry={loadSnapshot} />
   if (error || !snapshot) return <ErrorScreen message={error ?? 'Workspace không có dữ liệu.'} onRetry={loadSnapshot} />
 
   const selectedChapter = snapshot.chapters.find((chapter) => chapter.id === selectedChapterId) ?? snapshot.chapters[0]

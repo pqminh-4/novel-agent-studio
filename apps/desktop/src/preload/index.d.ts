@@ -28,6 +28,8 @@ export type NovelAgentApi = {
   recovery: {
     status(): Promise<RecoveryStatus>
     restart(): Promise<void>
+    /** Đăng ký nhận tín hiệu runtime chết quá ngưỡng; trả về hàm huỷ đăng ký. */
+    onFatal(listener: (reason: { message: string; restarts: number }) => void): () => void
   }
   exportBook(format: 'markdown' | 'docx' | 'epub' | 'pdf'): Promise<{ path: string } | null>
 }

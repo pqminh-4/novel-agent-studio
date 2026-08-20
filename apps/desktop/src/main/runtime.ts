@@ -68,6 +68,28 @@ parentPort.on('message', async (event) => {
 })
 
 process.once('exit', () => database.close())
+
+/**
+ * Lỗi ngoài luồng xử lý request trước đây sẽ giết utility process mà không đóng
+ * SQLite, để lại WAL chưa checkpoint. Ta ghi log, đóng database rồi thoát với mã
+ * khác 0 để RuntimeBridge tính vào ceiling khởi động lại.
+ */
+function handleFatal(kind: 'uncaughtException' | 'unhandledRejection', error: unknown): void {
+  const message = error instanceof Error ? `${error.message}\n${error.stack ?? ''}` : String(error)
+  console.error(`[runtime:${kind}] ${message}`)
+  try {
+    workflowTimers.forEach((timer) => clearTimeout(timer))
+    workflowControllers.forEach((controller) => controller.abort())
+    database.close()
+  } catch (closeError) {
+    console.error(`[runtime:${kind}] Không thể đóng SQLite sạch: ${closeError instanceof Error ? closeError.message : 'lỗi không xác định'}`)
+  }
+  process.exit(1)
+}
+
+process.on('uncaughtException', (error) => handleFatal('uncaughtException', error))
+process.on('unhandledRejection', (reason) => handleFatal('unhandledRejection', reason))
+
 parentPort.postMessage({ type: 'runtime:ready' })
 
 async function handleRequest(channel: string, payload: unknown): Promise<unknown> {
