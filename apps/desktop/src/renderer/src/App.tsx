@@ -507,6 +507,9 @@ function ManuscriptStudio({ snapshot, selectedChapter, onSnapshot, onChapterSave
     },
     onUpdate: ({ editor: currentEditor }) => {
       if (!activeChapterId.current) return
+      // Chương có nội dung hỏng ở chế độ chỉ đọc: main process sẽ từ chối lưu,
+      // nên không hẹn autosave để tránh báo lỗi liên tục khi người dùng gõ.
+      if (selectedChapter?.contentCorrupt) return
       setSaveState('dirty')
       if (saveTimer.current) window.clearTimeout(saveTimer.current)
       saveTimer.current = window.setTimeout(async () => {
@@ -568,6 +571,15 @@ function ManuscriptStudio({ snapshot, selectedChapter, onSnapshot, onChapterSave
               </span>
             </div>
           </div>
+          {selectedChapter.contentCorrupt ? (
+            <div className="notice notice--danger" role="alert">
+              <ShieldCheck size={14} />
+              <div>
+                <strong>Nội dung chương này đã hỏng và đang ở chế độ chỉ đọc.</strong>
+                <p>Bản gốc trong cơ sở dữ liệu được giữ nguyên, không bị ghi đè. Hãy khôi phục từ lịch sử phiên bản hoặc từ bản sao lưu trong Data Safety trước khi sửa tiếp.</p>
+              </div>
+            </div>
+          ) : null}
           <article className="paper">
             <div className="paper__chapter">CHƯƠNG {String(selectedChapter.number).padStart(2, '0')}</div>
             <input className="paper__title" value={selectedChapter.title} readOnly aria-label="Tiêu đề chương" />

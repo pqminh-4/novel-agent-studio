@@ -125,6 +125,9 @@ export const ChapterSchema = z.object({
   summary: z.string(),
   status: ChapterStatusSchema,
   content: z.record(z.string(), z.unknown()),
+  // Bật khi content_json trong SQLite không parse được. Giữ chương ở trạng thái
+  // chỉ đọc để autosave không ghi đè mất bản gốc đã hỏng.
+  contentCorrupt: z.boolean().default(false),
   wordCount: z.number().int(),
   updatedAt: z.string()
 })

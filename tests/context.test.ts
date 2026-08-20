@@ -28,6 +28,7 @@ function chapter(number: number, content: Record<string, unknown>, summary = '')
     summary,
     status: 'approved',
     content,
+    contentCorrupt: false,
     wordCount: 20,
     updatedAt: '2026-08-19T00:00:00.000Z'
   }

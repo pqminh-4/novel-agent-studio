@@ -7,6 +7,7 @@ import {
   BootstrapSnapshotSchema,
   LongContextPacketSchema,
   DEFAULT_ROLES,
+  OutlineChapterSchema,
   StoryBriefSchema,
   calculateBriefReadiness,
   getWorkflowSteps,
@@ -912,9 +913,9 @@ export class NovelDatabase {
       WHERE book_id = ? AND status = 'approved' ORDER BY version DESC LIMIT 1
     `).get(bookId) as SqlRow | undefined
     if (!outline) throw new Error('Hãy duyệt một phiên bản dàn ý trước khi chạy workflow.')
-    const outlineChapters = JSON.parse(String(outline.data_json)) as OutlineChapter[]
+    const outlineChapters = parseOutlineChapters(outline.data_json, String(outline.id)).value
     if (!outlineChapters.some((item) => item.number === Number(chapter.number))) {
-      throw new Error('Dàn ý đã duyệt chưa có mục tương ứng với chương này.')
+      throw new Error('Dàn ý đã duyệt chưa có mục tương ứng với chương này, hoặc dữ liệu dàn ý đã hỏng. Hãy duyệt lại một phiên bản dàn ý.')
     }
     const active = this.db.prepare(`
       SELECT id FROM workflow_runs
@@ -1127,8 +1128,9 @@ export class NovelDatabase {
 
       const chapterRow = this.db.prepare('SELECT * FROM chapters WHERE id = ?').get(String(run.chapter_id)) as SqlRow
       const outlineRow = this.db.prepare('SELECT data_json FROM outline_versions WHERE id = ?').get(String(run.outline_version_id)) as SqlRow
-      const outline = (JSON.parse(String(outlineRow.data_json)) as OutlineChapter[]).find((item) => item.number === Number(chapterRow.number))
-      if (!outline) throw new Error('Không tìm thấy mục dàn ý đã khóa cho chương.')
+      const outline = parseOutlineChapters(outlineRow.data_json, String(run.outline_version_id))
+        .value.find((item) => item.number === Number(chapterRow.number))
+      if (!outline) throw new Error('Không tìm thấy mục dàn ý đã khóa cho chương, hoặc phiên bản dàn ý đã khóa bị hỏng.')
       const chapter = mapChapter(chapterRow)
       const brief = this.getLatestBrief(String(run.book_id))
       const previousArtifacts = this.listWorkflowArtifacts(runId)
@@ -1781,8 +1783,9 @@ export class NovelDatabase {
       SELECT data_json FROM outline_versions WHERE book_id = ? AND status = 'approved' ORDER BY version DESC LIMIT 1
     `).get(chapter.bookId) as SqlRow | undefined
     if (!outlineRow) throw new Error('Hãy duyệt dàn ý trước khi xem trước context.')
-    const outline = (JSON.parse(String(outlineRow.data_json)) as OutlineChapter[]).find((item) => item.number === chapter.number)
-    if (!outline) throw new Error('Dàn ý đã duyệt chưa có chương tương ứng.')
+    const outline = parseOutlineChapters(outlineRow.data_json, chapter.bookId)
+      .value.find((item) => item.number === chapter.number)
+    if (!outline) throw new Error('Dàn ý đã duyệt chưa có chương tương ứng, hoặc dữ liệu dàn ý đã hỏng.')
     const candidates = this.selectLongContextCandidates(chapter.bookId, chapter.number, `${chapter.title} ${chapter.summary} ${outline.title} ${outline.purpose}`)
     return buildLongContextPacket({
       brief: this.getLatestBrief(chapter.bookId),
@@ -1932,7 +1935,16 @@ export class NovelDatabase {
     const row = this.db.prepare(`
       SELECT data_json FROM brief_versions WHERE book_id = ? ORDER BY version DESC LIMIT 1
     `).get(bookId) as SqlRow | undefined
-    return StoryBriefSchema.parse(row ? JSON.parse(String(row.data_json)) : {})
+    if (!row) return StoryBriefSchema.parse({})
+    const parsed = parseJsonColumn<Record<string, unknown>>(
+      row.data_json,
+      {},
+      { table: 'brief_versions', column: 'data_json', rowId: bookId },
+      isPlainObject
+    )
+    // Brief hỏng quay về mặc định để Đạo diễn vẫn mở được; bản gốc giữ nguyên trong SQLite.
+    const result = StoryBriefSchema.safeParse(parsed.value)
+    return result.success ? result.data : StoryBriefSchema.parse({})
   }
 
   saveBrief(bookId: string, brief: StoryBrief, status = 'draft'): StoryBrief {
@@ -2059,6 +2071,19 @@ export class NovelDatabase {
   }
 
   saveChapter(chapterId: string, content: Record<string, unknown>, wordCount: number): Chapter {
+    // Nếu content_json hiện tại không parse được, renderer đang hiển thị document
+    // dự phòng rỗng. Cho autosave ghi lên sẽ xoá vĩnh viễn bản thảo gốc, nên chặn
+    // lại và giữ chương ở chế độ chỉ đọc cho tới khi người dùng khôi phục.
+    const existing = this.db.prepare('SELECT content_json FROM chapters WHERE id = ? AND archived_at IS NULL').get(chapterId) as SqlRow | undefined
+    if (!existing) throw new Error('Không tìm thấy chương để lưu.')
+    if (parseJsonColumn<Record<string, unknown>>(
+      existing.content_json,
+      emptyDocument(),
+      { table: 'chapters', column: 'content_json', rowId: chapterId },
+      isPlainObject
+    ).corrupt) {
+      throw new Error('Nội dung chương này đã hỏng và đang ở chế độ chỉ đọc. Hãy khôi phục từ lịch sử phiên bản hoặc bản sao lưu trước khi sửa, để không ghi đè mất bản gốc.')
+    }
     const now = new Date().toISOString()
     this.db.exec('BEGIN IMMEDIATE')
     try {
@@ -2240,14 +2265,22 @@ function mapBook(row: SqlRow): Book {
 }
 
 function mapChapter(row: SqlRow): Chapter {
+  const id = String(row.id)
+  const content = parseJsonColumn<Record<string, unknown>>(
+    row.content_json,
+    emptyDocument(),
+    { table: 'chapters', column: 'content_json', rowId: id },
+    isPlainObject
+  )
   return {
-    id: String(row.id),
+    id,
     bookId: String(row.book_id),
     number: Number(row.number),
     title: String(row.title),
     summary: String(row.summary),
     status: String(row.status) as Chapter['status'],
-    content: JSON.parse(String(row.content_json)) as Record<string, unknown>,
+    content: content.value,
+    contentCorrupt: content.corrupt,
     wordCount: Number(row.word_count),
     updatedAt: String(row.updated_at)
   }
@@ -2262,7 +2295,7 @@ function mapOutlineVersion(row: SqlRow): OutlineVersion {
     originVersion: row.origin_version === null || row.origin_version === undefined ? null : Number(row.origin_version),
     createdAt: String(row.created_at),
     approvedAt: row.approved_at === null || row.approved_at === undefined ? null : String(row.approved_at),
-    chapters: JSON.parse(String(row.data_json)) as OutlineChapter[]
+    chapters: parseOutlineChapters(row.data_json, String(row.id)).value
   }
 }
 
@@ -2279,18 +2312,25 @@ function mapCanonFact(row: SqlRow): BootstrapSnapshot['canon'][number] {
 }
 
 function mapChapterSummary(row: SqlRow): ChapterSummary {
+  const id = String(row.id)
+  const list = (column: string, raw: unknown): string[] => parseJsonColumn<string[]>(
+    raw,
+    [],
+    { table: 'chapter_summaries', column, rowId: id },
+    isStringArray
+  ).value
   return {
-    id: String(row.id),
+    id,
     chapterId: String(row.chapter_id),
     bookId: String(row.book_id),
     chapterNumber: Number(row.chapter_number),
     chapterTitle: String(row.chapter_title),
     sourceVersion: Number(row.source_version),
     summary: String(row.summary),
-    keyEvents: JSON.parse(String(row.key_events_json)) as string[],
-    characters: JSON.parse(String(row.characters_json)) as string[],
-    locations: JSON.parse(String(row.locations_json)) as string[],
-    unresolvedThreads: JSON.parse(String(row.unresolved_threads_json)) as string[],
+    keyEvents: list('key_events_json', row.key_events_json),
+    characters: list('characters_json', row.characters_json),
+    locations: list('locations_json', row.locations_json),
+    unresolvedThreads: list('unresolved_threads_json', row.unresolved_threads_json),
     tokenEstimate: Number(row.token_estimate),
     updatedAt: String(row.updated_at)
   }
@@ -2348,7 +2388,12 @@ function mapWorkflowArtifact(row: SqlRow): WorkflowArtifact {
     status: String(row.status) as WorkflowArtifact['status'],
     title: String(row.title),
     summary: String(row.summary),
-    data: JSON.parse(String(row.data_json)) as Record<string, unknown>,
+    data: parseJsonColumn<Record<string, unknown>>(
+      row.data_json,
+      {},
+      { table: 'workflow_artifacts', column: 'data_json', rowId: String(row.id) },
+      isPlainObject
+    ).value,
     createdAt: String(row.created_at),
     reviewedAt: row.reviewed_at === null ? null : String(row.reviewed_at)
   }
@@ -2356,6 +2401,50 @@ function mapWorkflowArtifact(row: SqlRow): WorkflowArtifact {
 
 function emptyDocument(): Record<string, unknown> {
   return { type: 'doc', content: [{ type: 'paragraph' }] }
+}
+
+/**
+ * Parse một cột JSON của SQLite mà không làm sập cả snapshot.
+ *
+ * Một dòng hỏng hoặc lệch schema trước đây khiến `getBootstrapSnapshot` throw,
+ * làm người dùng mất đường vào toàn bộ workspace lành. Thay vào đó ta ghi nhận
+ * dòng hỏng và trả về giá trị dự phòng; dữ liệu gốc trong SQLite không bị sửa.
+ */
+function parseJsonColumn<T>(
+  raw: unknown,
+  fallback: T,
+  context: { table: string; column: string; rowId: string },
+  guard?: (value: unknown) => boolean
+): { value: T; corrupt: boolean } {
+  if (raw === null || raw === undefined) {
+    return { value: fallback, corrupt: true }
+  }
+  try {
+    const parsed = JSON.parse(String(raw)) as unknown
+    if (guard && !guard(parsed)) {
+      throw new Error('Dữ liệu JSON không đúng hình dạng mong đợi.')
+    }
+    return { value: parsed as T, corrupt: false }
+  } catch (error) {
+    console.error(`[database] Không đọc được ${context.table}.${context.column} của dòng ${context.rowId}: ${
+      error instanceof Error ? error.message : 'lỗi JSON không xác định'
+    }. Dòng này được đánh dấu hỏng và giữ nguyên trong SQLite.`)
+    return { value: fallback, corrupt: true }
+  }
+}
+
+function isPlainObject(value: unknown): boolean {
+  return typeof value === 'object' && value !== null && !Array.isArray(value)
+}
+
+function isStringArray(value: unknown): boolean {
+  return Array.isArray(value) && value.every((item) => typeof item === 'string')
+}
+
+function parseOutlineChapters(raw: unknown, rowId: string): { value: OutlineChapter[]; corrupt: boolean } {
+  const parsed = parseJsonColumn<unknown[]>(raw, [], { table: 'outline_versions', column: 'data_json', rowId }, Array.isArray)
+  const valid = parsed.value.filter((item) => OutlineChapterSchema.safeParse(item).success) as OutlineChapter[]
+  return { value: valid, corrupt: parsed.corrupt || valid.length !== parsed.value.length }
 }
 
 function extractText(node: unknown): string {
