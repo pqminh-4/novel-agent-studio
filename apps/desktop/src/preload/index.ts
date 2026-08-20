@@ -1,5 +1,11 @@
 import { contextBridge, ipcRenderer } from 'electron'
 
+type ExportFormat = 'markdown' | 'docx' | 'epub' | 'pdf'
+type ExportBatchResult = {
+  exported: Array<{ path: string; bookId: string; format: ExportFormat }>
+  failed: Array<{ bookId: string; format: ExportFormat; message: string }>
+}
+
 const api = {
   invoke: <T>(channel: string, payload: unknown = {}): Promise<T> => ipcRenderer.invoke('runtime:invoke', { channel, payload }),
   vault: {
@@ -30,6 +36,8 @@ const api = {
     }
   },
   exportBook: (format: 'markdown' | 'docx' | 'epub' | 'pdf'): Promise<{ path: string } | null> => ipcRenderer.invoke('export:book', format),
+  exportCustom: (input: { bookId: string; chapterIds: string[]; formats: Array<'markdown' | 'docx' | 'epub' | 'pdf'> }): Promise<ExportBatchResult | null> => ipcRenderer.invoke('export:custom', input),
+  exportBulk: (input: { bookIds: string[]; formats: Array<'markdown' | 'docx' | 'epub' | 'pdf'> }): Promise<ExportBatchResult | null> => ipcRenderer.invoke('export:bulk', input),
   updater: {
     state: <T>(): Promise<T> => ipcRenderer.invoke('updater:state'),
     check: <T>(): Promise<T> => ipcRenderer.invoke('updater:check'),

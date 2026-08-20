@@ -17,7 +17,7 @@ import type { BackupInspection, BootstrapSnapshot, ProviderKind, ProviderRoute, 
 import { RecoveryManager, type WorkflowProviderRouteSecret } from '@infra/index'
 import { RuntimeBridge } from './runtime-bridge'
 import { CredentialVault, type ProviderConnectionInput } from './vault'
-import { exportBook, suggestFileName, type ExportFormat } from './exporters'
+import { exportBook, exportBookFormats, suggestFileName, validateFormats, type ExportFormat } from './exporters'
 import { Logger } from './logger'
 import { AppUpdater } from './updater'
 
@@ -410,6 +410,7 @@ function registerIpc(): void {
   })
   ipcMain.handle('export:book', async (event, format: ExportFormat) => {
     validateSender(event.senderFrame?.url ?? '')
+    validateFormats([format])
     const snapshot = await requireRuntime().invoke<BootstrapSnapshot>('app:bootstrap')
     const result = await dialog.showSaveDialog(mainWindow!, {
       title: 'Xuất bản thảo',
@@ -420,6 +421,70 @@ function registerIpc(): void {
     await exportBook(snapshot, result.filePath, format)
     return { path: result.filePath }
   })
+  ipcMain.handle('export:custom', async (event, input: unknown) => {
+    validateSender(event.senderFrame?.url ?? '')
+    const request = parseCustomExportRequest(input)
+    const snapshot = await requireRuntime().invoke<BootstrapSnapshot>('app:bootstrap', { bookId: request.bookId })
+    if (snapshot.activeBook.id !== request.bookId) throw new Error('Không tìm thấy sách cần xuất bản.')
+    const selection = await dialog.showOpenDialog(mainWindow!, {
+      title: 'Chọn thư mục xuất bản tùy chỉnh',
+      properties: ['openDirectory', 'createDirectory']
+    })
+    if (selection.canceled || selection.filePaths.length === 0) return null
+    return exportBookFormats(snapshot, selection.filePaths[0], request.formats, request.chapterIds)
+  })
+  ipcMain.handle('export:bulk', async (event, input: unknown) => {
+    validateSender(event.senderFrame?.url ?? '')
+    const request = parseBulkExportRequest(input)
+    const selection = await dialog.showOpenDialog(mainWindow!, {
+      title: 'Chọn thư mục xuất bản hàng loạt',
+      properties: ['openDirectory', 'createDirectory']
+    })
+    if (selection.canceled || selection.filePaths.length === 0) return null
+    const exported: Array<{ path: string; bookId: string; format: ExportFormat }> = []
+    const failed: Array<{ bookId: string; format: ExportFormat; message: string }> = []
+    for (const bookId of request.bookIds) {
+      try {
+        const snapshot = await requireRuntime().invoke<BootstrapSnapshot>('app:bootstrap', { bookId })
+        const result = await exportBookFormats(snapshot, selection.filePaths[0], request.formats, undefined, `${snapshot.activeBook.title}-${snapshot.activeBook.id}`)
+        exported.push(...result.exported)
+        failed.push(...result.failed)
+      } catch (error) {
+        const message = error instanceof Error ? error.message : 'Không thể xuất sách.'
+        request.formats.forEach((format) => failed.push({ bookId, format, message }))
+      }
+    }
+    return { exported, failed }
+  })
+}
+
+function parseCustomExportRequest(input: unknown): { bookId: string; chapterIds: string[]; formats: ExportFormat[] } {
+  if (!input || typeof input !== 'object') throw new Error('Yêu cầu xuất bản tùy chỉnh không hợp lệ.')
+  const request = input as Record<string, unknown>
+  const bookId = parseEntityId(request.bookId, 'sách')
+  const chapterIds = parseEntityIds(request.chapterIds, 'chương', 5000)
+  return { bookId, chapterIds, formats: validateFormats(request.formats as ExportFormat[]) }
+}
+
+function parseBulkExportRequest(input: unknown): { bookIds: string[]; formats: ExportFormat[] } {
+  if (!input || typeof input !== 'object') throw new Error('Yêu cầu xuất bản hàng loạt không hợp lệ.')
+  const request = input as Record<string, unknown>
+  return {
+    bookIds: parseEntityIds(request.bookIds, 'sách', 500),
+    formats: validateFormats(request.formats as ExportFormat[])
+  }
+}
+
+function parseEntityIds(value: unknown, label: string, limit: number): string[] {
+  if (!Array.isArray(value) || value.length === 0 || value.length > limit) throw new Error(`Hãy chọn ít nhất một ${label}.`)
+  const ids = value.map((item) => parseEntityId(item, label))
+  if (new Set(ids).size !== ids.length) throw new Error(`Danh sách ${label} bị trùng lặp.`)
+  return ids
+}
+
+function parseEntityId(value: unknown, label: string): string {
+  if (typeof value !== 'string' || value.trim().length === 0 || value.length > 160) throw new Error(`Mã ${label} không hợp lệ.`)
+  return value
 }
 
 function requireRuntime(): RuntimeBridge {

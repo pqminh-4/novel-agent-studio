@@ -2164,6 +2164,118 @@ select:focus-visible,
   font-size: 7px;
 }
 
+.export-menu__separator {
+  height: 1px;
+  margin: 5px 8px;
+  background: var(--line);
+}
+
+.export-dialog__grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1.35fr) minmax(260px, .65fr);
+  gap: 16px;
+}
+
+.export-dialog__section-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 8px;
+  color: var(--muted);
+  font-size: 9px;
+}
+
+.export-dialog__section-head small {
+  color: var(--muted-2);
+}
+
+.export-selection-list {
+  max-height: 390px;
+  overflow: auto;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+}
+
+.export-selection-row {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  min-height: 50px;
+  padding: 7px 10px;
+  border-bottom: 1px solid var(--line);
+}
+
+.export-selection-row:last-child {
+  border-bottom: 0;
+}
+
+.export-selection-row--muted {
+  opacity: .58;
+}
+
+.export-selection-row > span {
+  display: grid;
+  flex: 1;
+  min-width: 0;
+  gap: 3px;
+}
+
+.export-selection-row strong {
+  overflow: hidden;
+  font-size: 9px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.export-selection-row small {
+  color: var(--muted-2);
+  font-size: 7px;
+}
+
+.export-selection-row > div {
+  display: flex;
+  gap: 3px;
+}
+
+.export-format-grid {
+  display: grid;
+  gap: 7px;
+}
+
+.export-format-grid label {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 10px;
+  background: var(--surface-2);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+}
+
+.export-format-grid label[data-selected='true'] {
+  background: var(--accent-soft);
+  border-color: rgba(210, 165, 94, .42);
+}
+
+.export-format-grid label > span {
+  display: grid;
+  gap: 3px;
+}
+
+.export-format-grid strong {
+  font-size: 9px;
+}
+
+.export-format-grid small {
+  color: var(--muted-2);
+  font-size: 7px;
+}
+
+@media (max-width: 760px) {
+  .export-dialog__grid { grid-template-columns: 1fr; }
+  .export-selection-list { max-height: 240px; }
+}
+
 .dialog-backdrop {
   position: fixed;
   z-index: 100;

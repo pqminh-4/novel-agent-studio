@@ -1,6 +1,6 @@
 {
   "name": "novel-agent-studio",
-  "version": "0.1.6",
+  "version": "0.1.7",
   "private": true,
   "description": "Studio Windows local-first để sáng tác tiểu thuyết dài bằng nhiều AI chuyên trách.",
   "author": "Novel Agent Studio",

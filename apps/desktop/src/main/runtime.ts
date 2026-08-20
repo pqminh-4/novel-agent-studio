@@ -92,10 +92,20 @@ process.on('unhandledRejection', (reason) => handleFatal('unhandledRejection', r
 
 parentPort.postMessage({ type: 'runtime:ready' })
 
+function readOptionalBookId(payload: unknown): string | undefined {
+  if (!payload || typeof payload !== 'object') return undefined
+  const value = (payload as Record<string, unknown>).bookId
+  if (value === undefined) return undefined
+  if (typeof value !== 'string' || value.trim().length === 0 || value.length > 160) throw new Error('Mã sách không hợp lệ.')
+  return value
+}
+
 async function handleRequest(channel: string, payload: unknown): Promise<unknown> {
   switch (channel) {
-    case 'app:bootstrap':
-      return database.getBootstrapSnapshot()
+    case 'app:bootstrap': {
+      const bookId = readOptionalBookId(payload)
+      return database.getBootstrapSnapshot(bookId)
+    }
     case 'workspace:create-series': {
       database.createSeries(CreateSeriesInputSchema.parse(payload))
       return database.getBootstrapSnapshot()

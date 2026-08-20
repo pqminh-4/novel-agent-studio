@@ -8,6 +8,12 @@ import type {
   UpdateState
 } from '@core/index'
 
+export type ExportFormat = 'markdown' | 'docx' | 'epub' | 'pdf'
+export type ExportBatchResult = {
+  exported: Array<{ path: string; bookId: string; format: ExportFormat }>
+  failed: Array<{ bookId: string; format: ExportFormat; message: string }>
+}
+
 export type NovelAgentApi = {
   invoke<T>(channel: string, payload?: unknown): Promise<T>
   vault: {
@@ -32,7 +38,9 @@ export type NovelAgentApi = {
     /** Đăng ký nhận tín hiệu runtime chết quá ngưỡng; trả về hàm huỷ đăng ký. */
     onFatal(listener: (reason: { message: string; restarts: number }) => void): () => void
   }
-  exportBook(format: 'markdown' | 'docx' | 'epub' | 'pdf'): Promise<{ path: string } | null>
+  exportBook(format: ExportFormat): Promise<{ path: string } | null>
+  exportCustom(input: { bookId: string; chapterIds: string[]; formats: ExportFormat[] }): Promise<ExportBatchResult | null>
+  exportBulk(input: { bookIds: string[]; formats: ExportFormat[] }): Promise<ExportBatchResult | null>
   updater: {
     state(): Promise<UpdateState>
     check(): Promise<UpdateState>

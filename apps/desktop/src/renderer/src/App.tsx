@@ -1,4 +1,4 @@
-import { Component, useCallback, useEffect, useMemo, useRef, useState, type ErrorInfo, type ReactNode } from 'react'
+import { Component, useCallback, useEffect, useMemo, useRef, useState, type Dispatch, type ErrorInfo, type ReactNode, type SetStateAction } from 'react'
 import { useEditor, EditorContent } from '@tiptap/react'
 import StarterKit from '@tiptap/starter-kit'
 import Placeholder from '@tiptap/extension-placeholder'
@@ -105,6 +105,7 @@ export function App(): ReactNode {
   const [projectManagerOpen, setProjectManagerOpen] = useState(false)
   const [chapterEditor, setChapterEditor] = useState<Chapter | 'new' | null>(null)
   const [workflowCenterOpen, setWorkflowCenterOpen] = useState(false)
+  const [exportDialog, setExportDialog] = useState<'custom' | 'bulk' | null>(null)
   const [runtimeFatal, setRuntimeFatal] = useState<string | null>(null)
   const workflowPollErrorNotified = useRef(false)
 
@@ -247,9 +248,15 @@ export function App(): ReactNode {
             }
           }}
           onExport={async (format) => {
-            const result = await window.novelAgent.exportBook(format)
-            if (result) toast(`Đã xuất bản thảo tới ${result.path}`, 'success')
+            try {
+              const result = await window.novelAgent.exportBook(format)
+              if (result) toast(`Đã xuất bản thảo tới ${result.path}`, 'success')
+            } catch (cause) {
+              toast(cause instanceof Error ? cause.message : 'Không thể xuất bản thảo.', 'danger')
+            }
           }}
+          onCustomExport={() => setExportDialog('custom')}
+          onBulkExport={() => setExportDialog('bulk')}
         />
         <WorkspaceErrorBoundary resetKey={workspace}>
           <WorkspaceContent
@@ -293,6 +300,14 @@ export function App(): ReactNode {
           chapter={chapterEditor === 'new' ? undefined : chapterEditor}
           onClose={() => setChapterEditor(null)}
           onSnapshot={(data, chapterId) => adoptSnapshot(data, chapterId)}
+          onToast={toast}
+        />
+      )}
+      {exportDialog && (
+        <ExportDialog
+          mode={exportDialog}
+          snapshot={snapshot}
+          onClose={() => setExportDialog(null)}
           onToast={toast}
         />
       )}
@@ -428,6 +443,8 @@ type WorkspaceHeaderProps = {
   onInspector: () => void
   onBackup: () => void
   onExport: (format: 'markdown' | 'docx' | 'epub' | 'pdf') => void
+  onCustomExport: () => void
+  onBulkExport: () => void
 }
 
 function WorkspaceHeader(props: WorkspaceHeaderProps): ReactNode {
@@ -462,12 +479,135 @@ function WorkspaceHeader(props: WorkspaceHeaderProps): ReactNode {
                   <FileText size={15} /><span><strong>{format === 'markdown' ? 'Markdown' : format.toUpperCase()}</strong><small>{exportDescription(format)}</small></span>
                 </button>
               ))}
+              <div className="export-menu__separator" />
+              <button onClick={() => { setExportOpen(false); props.onCustomExport() }}>
+                <Edit3 size={15} /><span><strong>Xuất bản tùy chỉnh</strong><small>Chọn chương, thứ tự và định dạng</small></span>
+              </button>
+              <button onClick={() => { setExportOpen(false); props.onBulkExport() }}>
+                <LibraryBig size={15} /><span><strong>Xuất bản hàng loạt</strong><small>Xuất nhiều sách vào một thư mục</small></span>
+              </button>
             </div>
           )}
         </div>
         <button className="icon-button icon-button--bordered" onClick={props.onInspector} aria-label="Bật tắt bảng thông tin" title="Bảng thông tin">
           <PanelRightClose size={16} style={{ transform: props.inspectorOpen ? 'none' : 'rotate(180deg)' }} />
         </button>
+      </div>
+    </div>
+  )
+}
+
+type ExportFormat = 'markdown' | 'docx' | 'epub' | 'pdf'
+
+function ExportDialog({ mode, snapshot, onClose, onToast }: {
+  mode: 'custom' | 'bulk'
+  snapshot: BootstrapSnapshot
+  onClose: () => void
+  onToast: (message: string, tone?: Toast['tone']) => void
+}): ReactNode {
+  const [formats, setFormats] = useState<ExportFormat[]>(['docx'])
+  const [chapterIds, setChapterIds] = useState(snapshot.chapters.map((chapter) => chapter.id))
+  const [bookIds, setBookIds] = useState([snapshot.activeBook.id])
+  const [exporting, setExporting] = useState(false)
+  const isCustom = mode === 'custom'
+
+  const toggleFormat = (format: ExportFormat): void => {
+    setFormats((current) => current.includes(format) ? current.filter((item) => item !== format) : [...current, format])
+  }
+  const toggleId = (id: string, setter: Dispatch<SetStateAction<string[]>>): void => {
+    setter((current) => current.includes(id) ? current.filter((item) => item !== id) : [...current, id])
+  }
+  const moveChapter = (id: string, offset: -1 | 1): void => {
+    setChapterIds((current) => {
+      const index = current.indexOf(id)
+      const target = index + offset
+      if (index < 0 || target < 0 || target >= current.length) return current
+      const next = [...current]
+      ;[next[index], next[target]] = [next[target], next[index]]
+      return next
+    })
+  }
+  const submit = async (): Promise<void> => {
+    if (formats.length === 0) return onToast('Hãy chọn ít nhất một định dạng.', 'danger')
+    if (isCustom && chapterIds.length === 0) return onToast('Hãy chọn ít nhất một chương.', 'danger')
+    if (!isCustom && bookIds.length === 0) return onToast('Hãy chọn ít nhất một sách.', 'danger')
+    setExporting(true)
+    try {
+      const result = isCustom
+        ? await window.novelAgent.exportCustom({ bookId: snapshot.activeBook.id, chapterIds, formats })
+        : await window.novelAgent.exportBulk({ bookIds, formats })
+      if (!result) return
+      if (result.failed.length === 0) {
+        onToast(`Đã xuất ${result.exported.length} tệp thành công.`, 'success')
+      } else {
+        onToast(`Đã xuất ${result.exported.length} tệp; ${result.failed.length} tệp lỗi.`, 'danger')
+      }
+      onClose()
+    } catch (cause) {
+      onToast(cause instanceof Error ? cause.message : 'Không thể xuất bản.', 'danger')
+    } finally {
+      setExporting(false)
+    }
+  }
+
+  const orderedChapters = chapterIds.map((id) => snapshot.chapters.find((chapter) => chapter.id === id)).filter((chapter): chapter is Chapter => Boolean(chapter))
+  const unselectedChapters = snapshot.chapters.filter((chapter) => !chapterIds.includes(chapter.id))
+  return (
+    <div className="dialog-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget && !exporting) onClose() }}>
+      <div className="dialog dialog--wide export-dialog" role="dialog" aria-modal="true" aria-labelledby="export-dialog-title">
+        <div className="dialog__head">
+          <div><span className="eyebrow">XUẤT BẢN</span><h2 id="export-dialog-title">{isCustom ? 'Xuất bản tùy chỉnh' : 'Xuất bản hàng loạt'}</h2></div>
+          <button className="icon-button" onClick={onClose} disabled={exporting} aria-label="Đóng"><X size={16} /></button>
+        </div>
+        <div className="export-dialog__grid">
+          <section>
+            <div className="export-dialog__section-head"><strong>{isCustom ? 'Chương và thứ tự' : 'Sách cần xuất'}</strong><small>{isCustom ? `${chapterIds.length}/${snapshot.chapters.length} chương` : `${bookIds.length}/${snapshot.books.length} sách`}</small></div>
+            <div className="export-selection-list">
+              {isCustom ? <>
+                {orderedChapters.map((chapter, index) => (
+                  <div className="export-selection-row" key={chapter.id}>
+                    <input type="checkbox" checked onChange={() => toggleId(chapter.id, setChapterIds)} aria-label={`Chọn ${chapter.title}`} />
+                    <span><strong>Chương {chapter.number}: {chapter.title}</strong><small>{chapter.wordCount.toLocaleString('vi-VN')} từ</small></span>
+                    <div>
+                      <button className="icon-button" disabled={index === 0} onClick={() => moveChapter(chapter.id, -1)} aria-label="Đưa lên"><ChevronDown size={14} style={{ transform: 'rotate(180deg)' }} /></button>
+                      <button className="icon-button" disabled={index === orderedChapters.length - 1} onClick={() => moveChapter(chapter.id, 1)} aria-label="Đưa xuống"><ChevronDown size={14} /></button>
+                    </div>
+                  </div>
+                ))}
+                {unselectedChapters.map((chapter) => (
+                  <label className="export-selection-row export-selection-row--muted" key={chapter.id}>
+                    <input type="checkbox" checked={false} onChange={() => setChapterIds((current) => [...current, chapter.id])} />
+                    <span><strong>Chương {chapter.number}: {chapter.title}</strong><small>Không xuất</small></span>
+                  </label>
+                ))}
+              </> : snapshot.books.map((book) => (
+                <label className="export-selection-row" key={book.id}>
+                  <input type="checkbox" checked={bookIds.includes(book.id)} onChange={() => toggleId(book.id, setBookIds)} />
+                  <span><strong>{book.title}</strong><small>{snapshot.series.find((series) => series.id === book.seriesId)?.name ?? 'Không có series'} · {book.approvedChapters}/{book.targetChapters} chương duyệt</small></span>
+                </label>
+              ))}
+            </div>
+          </section>
+          <section>
+            <div className="export-dialog__section-head"><strong>Định dạng</strong><small>Có thể chọn nhiều</small></div>
+            <div className="export-format-grid">
+              {(['docx', 'epub', 'pdf', 'markdown'] as ExportFormat[]).map((format) => (
+                <label key={format} data-selected={formats.includes(format)}>
+                  <input type="checkbox" checked={formats.includes(format)} onChange={() => toggleFormat(format)} />
+                  <FileText size={17} />
+                  <span><strong>{format === 'markdown' ? 'Markdown' : format.toUpperCase()}</strong><small>{exportDescription(format)}</small></span>
+                </label>
+              ))}
+            </div>
+            <div className="security-note"><FolderPlus size={15} /><p>Khi nhấn xuất, ứng dụng sẽ hỏi thư mục lưu. Mỗi sách và định dạng tạo một tệp riêng; dữ liệu không được tải lên mạng.</p></div>
+          </section>
+        </div>
+        <div className="dialog__actions">
+          <button className="button button--secondary" onClick={onClose} disabled={exporting}>Hủy</button>
+          <button className="button" onClick={() => void submit()} disabled={exporting || formats.length === 0 || (isCustom ? chapterIds.length === 0 : bookIds.length === 0)}>
+            {exporting ? <LoaderCircle className="spin" size={15} /> : <Download size={15} />} {exporting ? 'Đang xuất…' : 'Chọn thư mục và xuất'}
+          </button>
+        </div>
       </div>
     </div>
   )
