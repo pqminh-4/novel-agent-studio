@@ -1,0 +1,19 @@
+{
+  "extends": "@electron-toolkit/tsconfig/tsconfig.node.json",
+  "include": [
+    "electron.vite.config.ts",
+    "apps/desktop/src/main/**/*.ts",
+    "apps/desktop/src/preload/**/*.ts",
+    "packages/**/*.ts",
+    "tests/**/*.ts"
+  ],
+  "compilerOptions": {
+    "composite": true,
+    "types": ["node", "electron"],
+    "baseUrl": ".",
+    "paths": {
+      "@core/*": ["packages/core/src/*"],
+      "@infra/*": ["packages/infrastructure/src/*"]
+    }
+  }
+}

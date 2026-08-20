@@ -1,0 +1,85 @@
+{
+  "name": "novel-agent-studio",
+  "version": "0.1.5",
+  "private": true,
+  "description": "Studio Windows local-first để sáng tác tiểu thuyết dài bằng nhiều AI chuyên trách.",
+  "author": "Novel Agent Studio",
+  "license": "UNLICENSED",
+  "type": "module",
+  "main": "out/main/index.js",
+  "packageManager": "pnpm@11.17.0",
+  "engines": {
+    "node": ">=24.18.0 <25"
+  },
+  "scripts": {
+    "dev": "electron-vite dev",
+    "build": "pnpm typecheck && electron-vite build",
+    "preview": "electron-vite preview",
+    "typecheck": "tsc --noEmit -p tsconfig.node.json && tsc --noEmit -p tsconfig.web.json",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "package": "pnpm test && pnpm build && electron-builder --win nsis --x64 && pnpm release:metadata",
+    "package:dir": "pnpm build && electron-builder --dir --win --x64",
+    "release:metadata": "node scripts/generate-release-metadata.mjs"
+  },
+  "dependencies": {
+    "@tiptap/core": "3.30.1",
+    "@tiptap/extension-placeholder": "3.30.1",
+    "@tiptap/react": "3.30.1",
+    "@tiptap/starter-kit": "3.30.1",
+    "docx": "9.7.1",
+    "jszip": "3.10.1",
+    "lucide-react": "0.468.0",
+    "react": "19.2.8",
+    "react-dom": "19.2.8",
+    "zod": "4.4.3"
+  },
+  "devDependencies": {
+    "@electron-toolkit/tsconfig": "2.0.0",
+    "@electron/fuses": "2.1.3",
+    "@types/node": "24.13.3",
+    "@types/react": "19.2.18",
+    "@types/react-dom": "19.2.4",
+    "@vitejs/plugin-react": "5.2.0",
+    "electron": "43.4.1",
+    "electron-builder": "26.15.3",
+    "electron-vite": "4.0.1",
+    "typescript": "5.9.3",
+    "vite": "7.3.6",
+    "vitest": "3.2.7"
+  },
+  "build": {
+    "appId": "vn.novelagent.studio",
+    "productName": "Novel Agent Studio",
+    "afterPack": "scripts/after-pack.cjs",
+    "asar": true,
+    "asarUnpack": [],
+    "directories": {
+      "output": "release"
+    },
+    "files": [
+      "out/**/*",
+      "package.json"
+    ],
+    "win": {
+      "icon": "build/icon.ico",
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        }
+      ],
+      "artifactName": "Novel-Agent-Studio-Setup-${version}.${ext}"
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "perMachine": false,
+      "deleteAppDataOnUninstall": false,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true
+    }
+  }
+}
