@@ -39,10 +39,25 @@ let runtime: RuntimeBridge | null = null
 let vault: CredentialVault
 let recovery: RecoveryManager
 let logger: Logger
+
+// Cho phép QA giao diện dùng workspace tách biệt, không chạm dữ liệu thật trong AppData.
+const developmentUserData = process.env.NOVEL_AGENT_USER_DATA_DIRECTORY
+if (!app.isPackaged && developmentUserData) app.setPath('userData', developmentUserData)
 let updater: AppUpdater
 
 const RUNTIME_CHANNELS = new Set([
   'app:bootstrap',
+  'library:bootstrap',
+  'library:create-series',
+  'library:update-series',
+  'library:archive-series',
+  'library:create-book',
+  'library:update-book',
+  'library:archive-book',
+  'library:open-book',
+  'series-concept:bootstrap',
+  'series-concept:message',
+  'series-concept:promote',
   'director:message',
   'chapter:save',
   'workspace:create-series',
@@ -145,12 +160,12 @@ function createWindow(): void {
     minWidth: 1024,
     minHeight: 640,
     show: false,
-    backgroundColor: '#12110f',
+    backgroundColor: '#03111c',
     titleBarStyle: 'hidden',
     titleBarOverlay: {
-      color: '#151411',
-      symbolColor: '#a9a297',
-      height: 38
+      color: '#00000000',
+      symbolColor: '#6f8794',
+      height: 46
     },
     webPreferences: {
       preload: join(__dirname, '../preload/index.js'),
@@ -247,12 +262,14 @@ function registerIpc(): void {
   ipcMain.handle('runtime:invoke', async (event, input: { channel: string; payload: unknown }) => {
     validateSender(event.senderFrame?.url ?? '')
     if (!RUNTIME_CHANNELS.has(input.channel)) throw new Error('Kênh nghiệp vụ không được phép.')
-    if (input.channel === 'director:message') {
-      const message = input.payload as { bookId?: unknown; content?: unknown }
+    if (input.channel === 'director:message' || input.channel === 'series-concept:message') {
+      const message = input.payload as { bookId?: unknown; seriesId?: unknown; content?: unknown }
       const preferredKind = await vault.getPreferredKind()
       const provider = preferredKind ? await vault.reveal(preferredKind) : null
       return requireRuntime().invoke(input.channel, {
-        bookId: String(message.bookId ?? ''),
+        ...(input.channel === 'director:message'
+          ? { bookId: String(message.bookId ?? '') }
+          : { seriesId: String(message.seriesId ?? '') }),
         content: String(message.content ?? ''),
         providerSecret: provider ? {
           kind: provider.kind,

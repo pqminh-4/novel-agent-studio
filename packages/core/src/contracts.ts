@@ -84,6 +84,12 @@ export const SeriesSchema = z.object({
   updatedAt: z.string()
 })
 
+export const LibrarySeriesSchema = SeriesSchema.extend({
+  conceptReadiness: z.number().min(0).max(100),
+  conceptVersionId: z.string().nullable(),
+  promotedBookId: z.string().nullable()
+})
+
 export const BookSchema = z.object({
   id: z.string(),
   seriesId: z.string(),
@@ -184,6 +190,23 @@ export const OutlineVersionInputSchema = z.object({ versionId: EntityIdSchema })
 export const DirectorMessageInputSchema = z.object({
   bookId: EntityIdSchema,
   content: z.string().trim().min(1).max(50_000)
+})
+
+export const SeriesConceptMessageInputSchema = z.object({
+  seriesId: EntityIdSchema,
+  content: z.string().trim().min(1).max(50_000)
+})
+
+export const PromoteSeriesConceptInputSchema = BookInputSchema.extend({
+  conceptVersionId: EntityIdSchema
+})
+
+export const SeriesConceptMessageSchema = z.object({
+  id: z.string(),
+  seriesId: z.string(),
+  role: z.enum(['user', 'director', 'system']),
+  content: z.string(),
+  createdAt: z.string()
 })
 
 export const CanonFactSchema = z.object({
@@ -445,6 +468,31 @@ export const ReviewWorkflowInputSchema = z.object({
   decision: z.enum(['approve', 'reject'])
 })
 
+export const DatabaseStatusSchema = z.object({
+  version: z.string(),
+  fts5: z.boolean(),
+  path: z.string(),
+  schemaVersion: z.number().int().min(1)
+})
+
+export const LibrarySnapshotSchema = z.object({
+  series: z.array(LibrarySeriesSchema),
+  books: z.array(BookSchema),
+  activeBookId: z.string().nullable(),
+  roles: z.array(RoleProfileSchema),
+  database: DatabaseStatusSchema
+})
+
+export const SeriesConceptSnapshotSchema = z.object({
+  series: LibrarySeriesSchema,
+  messages: z.array(SeriesConceptMessageSchema),
+  brief: StoryBriefSchema,
+  briefFields: z.array(BriefFieldSchema),
+  readiness: z.number().min(0).max(100),
+  conceptVersionId: z.string(),
+  promotedBookId: z.string().nullable()
+})
+
 export const BootstrapSnapshotSchema = z.object({
   series: z.array(SeriesSchema),
   books: z.array(BookSchema),
@@ -462,16 +510,15 @@ export const BootstrapSnapshotSchema = z.object({
   jobs: z.array(RuntimeJobSchema),
   workflowRuns: z.array(WorkflowRunSchema),
   reviewArtifacts: z.array(WorkflowArtifactSchema),
-  database: z.object({
-    version: z.string(),
-    fts5: z.boolean(),
-    path: z.string(),
-    schemaVersion: z.number().int().min(1)
-  })
+  database: DatabaseStatusSchema
 })
 
 export type BootstrapSnapshot = z.infer<typeof BootstrapSnapshotSchema>
 export type Series = z.infer<typeof SeriesSchema>
+export type LibrarySeries = z.infer<typeof LibrarySeriesSchema>
+export type LibrarySnapshot = z.infer<typeof LibrarySnapshotSchema>
+export type SeriesConceptSnapshot = z.infer<typeof SeriesConceptSnapshotSchema>
+export type SeriesConceptMessage = z.infer<typeof SeriesConceptMessageSchema>
 export type Book = z.infer<typeof BookSchema>
 export type Chapter = z.infer<typeof ChapterSchema>
 export type CreateSeriesInput = z.infer<typeof CreateSeriesInputSchema>
@@ -481,6 +528,8 @@ export type UpdateBookInput = z.infer<typeof UpdateBookInputSchema>
 export type CreateChapterInput = z.infer<typeof CreateChapterInputSchema>
 export type UpdateChapterInput = z.infer<typeof UpdateChapterInputSchema>
 export type ChatMessage = z.infer<typeof ChatMessageSchema>
+export type SeriesConceptMessageInput = z.infer<typeof SeriesConceptMessageInputSchema>
+export type PromoteSeriesConceptInput = z.infer<typeof PromoteSeriesConceptInputSchema>
 export type OutlineChapter = z.infer<typeof OutlineChapterSchema>
 export type OutlineVersion = z.infer<typeof OutlineVersionSchema>
 export type CanonFact = z.infer<typeof CanonFactSchema>

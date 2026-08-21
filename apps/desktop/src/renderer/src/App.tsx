@@ -21,8 +21,7 @@ import {
   FileArchive,
   FileText,
   FolderPlus,
-  GalleryVerticalEnd,
-  Image,
+  Feather,
   Italic,
   LibraryBig,
   ListTree,
@@ -30,6 +29,7 @@ import {
   MessageSquareText,
   Moon,
   MoreHorizontal,
+  PanelLeftClose,
   PanelRightClose,
   Pause,
   Play,
@@ -41,7 +41,6 @@ import {
   Save,
   Search,
   Send,
-  Settings,
   ShieldCheck,
   ShieldAlert,
   Sparkles,
@@ -60,6 +59,7 @@ import {
   type BootstrapSnapshot,
   type Book,
   type Chapter,
+  type LibrarySnapshot,
   type OutlineVersion,
   type ProviderConnection,
   type ProviderKind,
@@ -67,15 +67,18 @@ import {
   type RecoveryStatus,
   type RoleProfile,
   type Series,
+  type SeriesConceptSnapshot,
   type UpdateState,
   type WorkflowArtifact,
   type WorkflowPreset,
   type WorkflowRun
 } from '@core/index'
+import { AppRail, TitleBar, type Workspace } from './ui/shell'
+import { LibraryDashboard, SeriesConceptStudio } from './ui/library'
 
-type Workspace = 'manuscript' | 'outline' | 'canon' | 'agents' | 'visual' | 'settings'
 type InspectorTab = 'brief' | 'canon' | 'research'
 type Toast = { id: number; message: string; tone: 'success' | 'danger' | 'neutral' }
+type AppSurface = 'library' | 'series-concept' | 'book' | 'settings'
 
 const DEFAULT_ENDPOINTS: Record<Exclude<ProviderKind, 'demo'>, string> = {
   openai: 'https://api.openai.com',
@@ -92,17 +95,21 @@ const DEFAULT_MODELS: Record<Exclude<ProviderKind, 'demo'>, string> = {
 }
 
 export function App(): ReactNode {
+  const [library, setLibrary] = useState<LibrarySnapshot | null>(null)
   const [snapshot, setSnapshot] = useState<BootstrapSnapshot | null>(null)
+  const [concept, setConcept] = useState<SeriesConceptSnapshot | null>(null)
+  const [surface, setSurface] = useState<AppSurface>('library')
   const [recoveryStatus, setRecoveryStatus] = useState<RecoveryStatus | null>(null)
   const [workspace, setWorkspace] = useState<Workspace>('manuscript')
   const [inspectorTab, setInspectorTab] = useState<InspectorTab>('brief')
   const [selectedChapterId, setSelectedChapterId] = useState('')
   const [theme, setTheme] = useState<'dark' | 'light'>('dark')
+  const [projectOpen, setProjectOpen] = useState(true)
   const [inspectorOpen, setInspectorOpen] = useState(true)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [toasts, setToasts] = useState<Toast[]>([])
-  const [projectManagerOpen, setProjectManagerOpen] = useState(false)
+  const [manuscriptStartMode, setManuscriptStartMode] = useState<'write' | 'director'>('write')
   const [chapterEditor, setChapterEditor] = useState<Chapter | 'new' | null>(null)
   const [workflowCenterOpen, setWorkflowCenterOpen] = useState(false)
   const [exportDialog, setExportDialog] = useState<'custom' | 'bulk' | null>(null)
@@ -114,16 +121,19 @@ export function App(): ReactNode {
       const status = await window.novelAgent.recovery.status()
       setRecoveryStatus(status)
       if (status.safeMode) {
+        setLibrary(null)
         setSnapshot(null)
         setError(null)
         return
       }
-      const data = await window.novelAgent.invoke<BootstrapSnapshot>('app:bootstrap')
-      setSnapshot(data)
-      setSelectedChapterId((current) => current || data.chapters[0]?.id || '')
+      const data = await window.novelAgent.invoke<LibrarySnapshot>('library:bootstrap')
+      setLibrary(data)
+      setSnapshot(null)
+      setConcept(null)
+      setSurface('library')
       setError(null)
     } catch (cause) {
-      setError(cause instanceof Error ? cause.message : 'Không thể mở workspace.')
+      setError(cause instanceof Error ? cause.message : 'Không thể mở Thư viện.')
     } finally {
       setLoading(false)
     }
@@ -162,12 +172,60 @@ export function App(): ReactNode {
 
   const adoptSnapshot = useCallback((data: BootstrapSnapshot, chapterId?: string) => {
     setSnapshot(data)
+    setSurface('book')
     setSelectedChapterId((current) => {
       if (chapterId && data.chapters.some((chapter) => chapter.id === chapterId)) return chapterId
       if (data.chapters.some((chapter) => chapter.id === current)) return current
       return data.chapters[0]?.id ?? ''
     })
   }, [])
+
+  const openBook = useCallback(async (bookId: string, targetWorkspace: Workspace = 'manuscript', startMode: 'write' | 'director' = 'write') => {
+    try {
+      const data = await window.novelAgent.invoke<BootstrapSnapshot>('library:open-book', { bookId })
+      setManuscriptStartMode(startMode)
+      setWorkspace(targetWorkspace)
+      adoptSnapshot(data)
+    } catch (cause) {
+      toast(cause instanceof Error ? cause.message : 'Không thể mở sách.', 'danger')
+    }
+  }, [adoptSnapshot, toast])
+
+  const openConcept = useCallback(async (seriesId: string) => {
+    try {
+      const data = await window.novelAgent.invoke<SeriesConceptSnapshot>('series-concept:bootstrap', { id: seriesId })
+      setConcept(data)
+      setSurface('series-concept')
+    } catch (cause) {
+      toast(cause instanceof Error ? cause.message : 'Không thể mở định hướng Series.', 'danger')
+    }
+  }, [toast])
+
+  const openLibrary = useCallback(async () => {
+    try {
+      const data = await window.novelAgent.invoke<LibrarySnapshot>('library:bootstrap')
+      setLibrary(data)
+      setConcept(null)
+      setSurface('library')
+    } catch (cause) {
+      toast(cause instanceof Error ? cause.message : 'Không thể làm mới Thư viện.', 'danger')
+    }
+  }, [toast])
+
+  const changeWorkspace = useCallback((value: Workspace) => {
+    if (value === 'settings') {
+      setWorkspace('settings')
+      setSurface('settings')
+      return
+    }
+    if (surface === 'book' && snapshot) {
+      setWorkspace(value)
+      return
+    }
+    const bookId = library?.activeBookId
+    if (bookId) void openBook(bookId, value)
+    else toast('Hãy mở hoặc tạo một sách từ Thư viện trước.', 'neutral')
+  }, [library?.activeBookId, openBook, snapshot, surface, toast])
 
   const activeWorkflowCount = snapshot?.workflowRuns.filter((run) => run.status === 'queued' || run.status === 'running').length ?? 0
 
@@ -204,39 +262,98 @@ export function App(): ReactNode {
   if (loading) return <LoadingScreen />
   if (recoveryStatus?.safeMode) return <RecoverySafeMode status={recoveryStatus} onRefresh={loadSnapshot} />
   if (runtimeFatal) return <ErrorScreen message={runtimeFatal} onRetry={loadSnapshot} />
-  if (error || !snapshot) return <ErrorScreen message={error ?? 'Workspace không có dữ liệu.'} onRetry={loadSnapshot} />
+  if (error || !library) return <ErrorScreen message={error ?? 'Thư viện không có dữ liệu.'} onRetry={loadSnapshot} />
+
+  if (surface === 'library') {
+    return (
+      <div className="app" data-surface="library" data-inspector="closed" data-project="closed">
+        <TitleBar />
+        <AppRail workspace={workspace} surface={surface} hasBook={Boolean(library.activeBookId)} onHome={() => void openLibrary()} onChange={changeWorkspace} />
+        <main className="library-workspace">
+          <LibraryDashboard snapshot={library} onSnapshot={setLibrary} onOpenBook={(bookId, target) => void openBook(bookId, target)} onOpenConcept={(seriesId) => void openConcept(seriesId)} onToast={toast} />
+        </main>
+        <ToastStack items={toasts} />
+      </div>
+    )
+  }
+
+  if (surface === 'series-concept' && concept) {
+    return (
+      <div className="app" data-surface="series-concept" data-inspector="closed" data-project="closed">
+        <TitleBar />
+        <AppRail workspace={workspace} surface={surface} hasBook={Boolean(library.activeBookId)} onHome={() => void openLibrary()} onChange={changeWorkspace} />
+        <main className="concept-workspace">
+          <SeriesConceptStudio
+            snapshot={concept}
+            onSnapshot={setConcept}
+            onHome={() => void openLibrary()}
+            onPromoted={(data) => {
+              setManuscriptStartMode('director')
+              setWorkspace('manuscript')
+              adoptSnapshot(data)
+              void window.novelAgent.invoke<LibrarySnapshot>('library:bootstrap').then(setLibrary).catch(() => undefined)
+            }}
+            onToast={toast}
+          />
+        </main>
+        <ToastStack items={toasts} />
+      </div>
+    )
+  }
+
+  if (surface === 'settings') {
+    return (
+      <div className="app" data-surface="settings" data-inspector="closed" data-project="closed">
+        <TitleBar />
+        <AppRail workspace={workspace} surface={surface} hasBook={Boolean(library.activeBookId)} onHome={() => void openLibrary()} onChange={changeWorkspace} />
+        <main className="global-settings-workspace">
+          <div className="workspace-header"><div><div className="eyebrow">NOVEL AGENT STUDIO</div><h1>Cài đặt</h1></div></div>
+          <SettingsStudio snapshot={library} onToast={toast} />
+        </main>
+        <ToastStack items={toasts} />
+      </div>
+    )
+  }
+
+  if (!snapshot) return <ErrorScreen message="Không tìm thấy sách đang mở." onRetry={loadSnapshot} />
 
   const selectedChapter = snapshot.chapters.find((chapter) => chapter.id === selectedChapterId) ?? snapshot.chapters[0]
+  const inspectorVisible = inspectorOpen && workspace !== 'settings'
 
   return (
-    <div className="app" data-inspector={inspectorOpen ? 'open' : 'closed'}>
+    <div className="app" data-inspector={inspectorVisible ? 'open' : 'closed'} data-project={projectOpen ? 'open' : 'closed'}>
       <TitleBar />
-      <AppRail workspace={workspace} onChange={setWorkspace} />
-      <ProjectSidebar
-        snapshot={snapshot}
-        selectedChapterId={selectedChapter?.id ?? ''}
-        onSelectChapter={(id) => {
-          setSelectedChapterId(id)
-          setWorkspace('manuscript')
-        }}
-        onManageProjects={() => setProjectManagerOpen(true)}
-        onCreateChapter={() => setChapterEditor('new')}
-        onManageChapter={(chapter) => setChapterEditor(chapter)}
-        onSwitchBook={async (bookId) => {
-          try {
-            const data = await window.novelAgent.invoke<BootstrapSnapshot>('workspace:switch-book', { bookId })
-            adoptSnapshot(data)
-          } catch (cause) {
-            toast(cause instanceof Error ? cause.message : 'Không thể mở sách.', 'danger')
-          }
-        }}
-      />
-      <main className="workspace">
+      <AppRail workspace={workspace} surface={surface} hasBook={Boolean(library.activeBookId)} onHome={() => void openLibrary()} onChange={changeWorkspace} />
+      {projectOpen && (
+        <ProjectSidebar
+          snapshot={snapshot}
+          selectedChapterId={selectedChapter?.id ?? ''}
+          onSelectChapter={(id) => {
+            setSelectedChapterId(id)
+            setWorkspace('manuscript')
+          }}
+          onManageProjects={() => void openLibrary()}
+          onCreateChapter={() => setChapterEditor('new')}
+          onManageChapter={(chapter) => setChapterEditor(chapter)}
+          onSwitchBook={async (bookId) => {
+            try {
+              await openBook(bookId)
+            } catch (cause) {
+              toast(cause instanceof Error ? cause.message : 'Không thể mở sách.', 'danger')
+            }
+          }}
+        />
+      )}
+      <main className="workspace" data-workspace={workspace}>
         <WorkspaceHeader
           snapshot={snapshot}
           workspace={workspace}
+          selectedChapterTitle={selectedChapter?.title}
           theme={theme}
-          inspectorOpen={inspectorOpen}
+          projectOpen={projectOpen}
+          inspectorOpen={inspectorVisible}
+          inspectorAvailable={workspace !== 'settings'}
+          onProject={() => setProjectOpen((value) => !value)}
           onTheme={() => setTheme((value) => value === 'dark' ? 'light' : 'dark')}
           onInspector={() => setInspectorOpen((value) => !value)}
           onBackup={async () => {
@@ -273,10 +390,11 @@ export function App(): ReactNode {
             onToast={toast}
             onCreateChapter={() => setChapterEditor('new')}
             onOpenWorkflow={() => setWorkflowCenterOpen(true)}
+            initialManuscriptMode={manuscriptStartMode}
           />
         </WorkspaceErrorBoundary>
       </main>
-      {inspectorOpen && (
+      {inspectorVisible && (
         <Inspector
           snapshot={snapshot}
           tab={inspectorTab}
@@ -286,14 +404,6 @@ export function App(): ReactNode {
       )}
       <JobTray snapshot={snapshot} onOpen={() => setWorkflowCenterOpen(true)} />
       <ToastStack items={toasts} />
-      {projectManagerOpen && (
-        <ProjectManagerDialog
-          snapshot={snapshot}
-          onClose={() => setProjectManagerOpen(false)}
-          onSnapshot={(data) => adoptSnapshot(data)}
-          onToast={toast}
-        />
-      )}
       {chapterEditor && (
         <ChapterDialog
           bookId={snapshot.activeBook.id}
@@ -320,45 +430,6 @@ export function App(): ReactNode {
         />
       )}
     </div>
-  )
-}
-
-function TitleBar(): ReactNode {
-  return (
-    <header className="titlebar">
-      <div className="titlebar__brand">
-        <span className="brand-mark"><GalleryVerticalEnd size={14} /></span>
-        <span>Novel Agent Studio</span>
-        <span className="titlebar__version">PREVIEW 0.1</span>
-      </div>
-      <div className="titlebar__status"><span className="status-dot status-dot--good" /> Local-first · Đã lưu</div>
-    </header>
-  )
-}
-
-function AppRail({ workspace, onChange }: { workspace: Workspace; onChange: (value: Workspace) => void }): ReactNode {
-  const items: Array<{ id: Workspace; label: string; icon: ReactNode }> = [
-    { id: 'manuscript', label: 'Bản thảo', icon: <BookOpenText size={19} /> },
-    { id: 'outline', label: 'Dàn ý', icon: <ListTree size={19} /> },
-    { id: 'canon', label: 'Story Bible', icon: <LibraryBig size={19} /> },
-    { id: 'agents', label: 'AI Studio', icon: <BrainCircuit size={19} /> },
-    { id: 'visual', label: 'Visual Studio', icon: <Image size={19} /> }
-  ]
-  return (
-    <nav className="app-rail" aria-label="Khu vực chính">
-      <div className="app-rail__primary">
-        {items.map((item) => (
-          <button key={item.id} className="rail-button" data-active={workspace === item.id} onClick={() => onChange(item.id)} aria-label={item.label} title={item.label}>
-            {item.icon}
-            <span className="rail-button__indicator" />
-          </button>
-        ))}
-      </div>
-      <button className="rail-button" data-active={workspace === 'settings'} onClick={() => onChange('settings')} aria-label="Cài đặt" title="Cài đặt">
-        <Settings size={19} />
-        <span className="rail-button__indicator" />
-      </button>
-    </nav>
   )
 }
 
@@ -437,8 +508,12 @@ function ProjectSidebar({
 type WorkspaceHeaderProps = {
   snapshot: BootstrapSnapshot
   workspace: Workspace
+  selectedChapterTitle?: string
   theme: 'dark' | 'light'
+  projectOpen: boolean
   inspectorOpen: boolean
+  inspectorAvailable: boolean
+  onProject: () => void
   onTheme: () => void
   onInspector: () => void
   onBackup: () => void
@@ -451,7 +526,7 @@ function WorkspaceHeader(props: WorkspaceHeaderProps): ReactNode {
   const [exportOpen, setExportOpen] = useState(false)
   const activeSeries = props.snapshot.series.find((series) => series.id === props.snapshot.activeBook.seriesId)
   const labels: Record<Workspace, string> = {
-    manuscript: 'Manuscript Studio',
+    manuscript: props.selectedChapterTitle ?? 'Bản thảo',
     outline: 'Xưởng dàn ý',
     canon: 'Story Bible',
     agents: 'AI Studio',
@@ -465,6 +540,9 @@ function WorkspaceHeader(props: WorkspaceHeaderProps): ReactNode {
         <h1>{labels[props.workspace]}</h1>
       </div>
       <div className="workspace-actions">
+        <button className="icon-button icon-button--bordered" onClick={props.onProject} aria-label="Bật tắt cây dự án" title="Cây dự án">
+          <PanelLeftClose size={16} style={{ transform: props.projectOpen ? 'none' : 'rotate(180deg)' }} />
+        </button>
         <button className="icon-button icon-button--bordered" disabled aria-label="Tìm kiếm" title="Tìm kiếm toàn văn sẽ có trong sprint sau"><Search size={16} /></button>
         <button className="icon-button icon-button--bordered" onClick={props.onTheme} aria-label="Đổi giao diện" title="Đổi giao diện">
           {props.theme === 'dark' ? <Sun size={16} /> : <Moon size={16} />}
@@ -489,9 +567,11 @@ function WorkspaceHeader(props: WorkspaceHeaderProps): ReactNode {
             </div>
           )}
         </div>
-        <button className="icon-button icon-button--bordered" onClick={props.onInspector} aria-label="Bật tắt bảng thông tin" title="Bảng thông tin">
-          <PanelRightClose size={16} style={{ transform: props.inspectorOpen ? 'none' : 'rotate(180deg)' }} />
-        </button>
+        {props.inspectorAvailable && (
+          <button className="icon-button icon-button--bordered" onClick={props.onInspector} aria-label="Bật tắt bảng thông tin" title="Bảng thông tin">
+            <PanelRightClose size={16} style={{ transform: props.inspectorOpen ? 'none' : 'rotate(180deg)' }} />
+          </button>
+        )}
       </div>
     </div>
   )
@@ -622,10 +702,11 @@ function WorkspaceContent(props: {
   onToast: (message: string, tone?: Toast['tone']) => void
   onCreateChapter: () => void
   onOpenWorkflow: () => void
+  initialManuscriptMode: 'write' | 'director'
 }): ReactNode {
   switch (props.workspace) {
     case 'manuscript':
-      return <ManuscriptStudio {...props} />
+      return <ManuscriptStudio {...props} initialMode={props.initialManuscriptMode} />
     case 'outline':
       return <OutlineStudio snapshot={props.snapshot} onSnapshot={props.onSnapshot} onToast={props.onToast} />
     case 'canon':
@@ -639,15 +720,16 @@ function WorkspaceContent(props: {
   }
 }
 
-function ManuscriptStudio({ snapshot, selectedChapter, onSnapshot, onChapterSaved, onToast, onCreateChapter }: {
+function ManuscriptStudio({ snapshot, selectedChapter, onSnapshot, onChapterSaved, onToast, onCreateChapter, initialMode }: {
   snapshot: BootstrapSnapshot
   selectedChapter?: Chapter
   onSnapshot: (value: BootstrapSnapshot) => void
   onChapterSaved: (chapter: Chapter) => void
   onToast: (message: string, tone?: Toast['tone']) => void
   onCreateChapter: () => void
+  initialMode: 'write' | 'director'
 }): ReactNode {
-  const [mode, setMode] = useState<'write' | 'director'>('write')
+  const [mode, setMode] = useState<'write' | 'director'>(initialMode)
   const [saveState, setSaveState] = useState<'saved' | 'saving' | 'dirty'>('saved')
   const saveTimer = useRef<number | null>(null)
   const activeChapterId = useRef(selectedChapter?.id)
@@ -700,9 +782,23 @@ function ManuscriptStudio({ snapshot, selectedChapter, onSnapshot, onChapterSave
     setSaveState('saved')
   }, [editor, selectedChapter?.id])
 
+  useEffect(() => {
+    setMode(initialMode)
+  }, [initialMode, snapshot.activeBook.id])
+
   if (!editor) return <LoadingPanel label="Đang mở chương…" />
   if (!selectedChapter) {
-    return <div className="empty-studio"><BookOpenText size={30} /><h2>Bắt đầu chương đầu tiên</h2><p>Sách đã sẵn sàng. Tạo một chương để mở không gian viết và autosave cục bộ.</p><button className="button button--primary" onClick={onCreateChapter}><Plus size={15} /> Tạo chương</button></div>
+    return (
+      <div className="manuscript-layout">
+        <div className="mode-tabs" role="tablist" aria-label="Chế độ làm việc">
+          <button role="tab" aria-selected={mode === 'write'} data-active={mode === 'write'} onClick={() => setMode('write')}><FileText size={14} /> Viết</button>
+          <button role="tab" aria-selected={mode === 'director'} data-active={mode === 'director'} onClick={() => setMode('director')}><MessageSquareText size={14} /> Trò chuyện với Đạo diễn</button>
+        </div>
+        {mode === 'director'
+          ? <DirectorChat snapshot={snapshot} onSnapshot={onSnapshot} onToast={onToast} />
+          : <div className="empty-studio"><BookOpenText size={30} /><h2>Bắt đầu chương đầu tiên</h2><p>Sách đã sẵn sàng. Tạo một chương để mở không gian viết và autosave cục bộ.</p><button className="button button--primary" onClick={onCreateChapter}><Plus size={15} /> Tạo chương</button></div>}
+      </div>
+    )
   }
 
   return (
@@ -763,7 +859,9 @@ function DirectorChat({ snapshot, onSnapshot, onToast }: { snapshot: BootstrapSn
   const [activeProvider, setActiveProvider] = useState<Exclude<ProviderKind, 'demo'> | null>(null)
   const endRef = useRef<HTMLDivElement>(null)
 
-  useEffect(() => endRef.current?.scrollIntoView({ block: 'end' }), [snapshot.messages.length])
+  useEffect(() => {
+    endRef.current?.scrollIntoView({ block: 'end' })
+  }, [snapshot.messages.length])
   useEffect(() => {
     void window.novelAgent.vault.preferred()
       .then(setActiveProvider)
@@ -1052,7 +1150,7 @@ function VisualStudio(): ReactNode {
   )
 }
 
-function SettingsStudio({ snapshot, onToast }: { snapshot: BootstrapSnapshot; onToast: (message: string, tone?: Toast['tone']) => void }): ReactNode {
+function SettingsStudio({ snapshot, onToast }: { snapshot: Pick<BootstrapSnapshot, 'roles' | 'database'>; onToast: (message: string, tone?: Toast['tone']) => void }): ReactNode {
   const [connections, setConnections] = useState<ProviderConnection[]>([])
   const [preferred, setPreferred] = useState<Exclude<ProviderKind, 'demo'> | null>(null)
   const [routes, setRoutes] = useState<ProviderRoute[]>([])
@@ -1364,7 +1462,7 @@ type ProjectEditor =
   | { kind: 'series'; value?: Series }
   | { kind: 'book'; seriesId: string; value?: Book }
 
-function ProjectManagerDialog({ snapshot, onClose, onSnapshot, onToast }: {
+export function ProjectManagerDialog({ snapshot, onClose, onSnapshot, onToast }: {
   snapshot: BootstrapSnapshot
   onClose: () => void
   onSnapshot: (value: BootstrapSnapshot) => void
@@ -1680,7 +1778,7 @@ function RecoverySafeMode({ status, onRefresh }: { status: RecoveryStatus; onRef
 
   return (
     <div className="recovery-screen">
-      <div className="recovery-brand"><span className="brand-mark brand-mark--large"><GalleryVerticalEnd size={22} /></span><div><strong>Novel Agent Studio</strong><small>SQLite Safe Mode</small></div></div>
+      <div className="recovery-brand"><span className="brand-mark brand-mark--large"><Feather size={24} /></span><div><strong>Novel Agent Studio</strong><small>SQLite Safe Mode</small></div></div>
       <main className="recovery-panel">
         <div className="recovery-panel__icon"><ShieldAlert size={26} /></div>
         <span className="eyebrow">DỮ LIỆU ĐƯỢC KHÓA CHỈ ĐỌC</span>
@@ -1793,7 +1891,7 @@ function describeUpdateState(state: UpdateState): string {
 }
 
 function LoadingScreen(): ReactNode {
-  return <div className="loading-screen"><div className="loading-brand"><span className="brand-mark brand-mark--large"><GalleryVerticalEnd size={22} /></span><div><h1>Novel Agent Studio</h1><p>Đang mở không gian sáng tác của bạn…</p></div></div><div className="loading-line"><span /></div></div>
+  return <div className="loading-screen"><div className="loading-brand"><span className="brand-mark brand-mark--large"><Feather size={24} /></span><div><h1>Novel Agent Studio</h1><p>Đang mở không gian sáng tác của bạn…</p></div></div><div className="loading-line"><span /></div></div>
 }
 
 function ErrorScreen({ message, onRetry }: { message: string; onRetry: () => void }): ReactNode {

@@ -25,7 +25,7 @@ import {
   type RecoveryStatus
 } from '@core/index'
 
-export const CURRENT_SCHEMA_VERSION = 7
+export const CURRENT_SCHEMA_VERSION = 8
 
 const REQUIRED_TABLES = ['schema_migrations', 'series', 'books', 'chapters', 'document_versions'] as const
 
@@ -69,6 +69,12 @@ export function inspectSqliteDatabase(
     }
     if (schemaVersion > CURRENT_SCHEMA_VERSION) {
       throw new RecoveryValidationError('database_newer', `Backup dùng schema v${schemaVersion}, mới hơn ứng dụng hiện tại v${CURRENT_SCHEMA_VERSION}.`)
+    }
+    if (schemaVersion >= 8) {
+      for (const table of ['series_concept_messages', 'series_concept_brief_versions', 'series_concept_promotions']) {
+        const exists = database.prepare("SELECT 1 AS value FROM sqlite_master WHERE type = 'table' AND name = ?").get(table)
+        if (!exists) throw new RecoveryValidationError('restore_failed', `Backup schema v8 thiếu bảng bắt buộc: ${table}.`)
+      }
     }
     return BackupInspectionSchema.parse({
       kind,

@@ -5,9 +5,11 @@ import { backup, DatabaseSync } from 'node:sqlite'
 import {
   BRIEF_FIELD_LABELS,
   BootstrapSnapshotSchema,
+  LibrarySnapshotSchema,
   LongContextPacketSchema,
   DEFAULT_ROLES,
   OutlineChapterSchema,
+  SeriesConceptSnapshotSchema,
   StoryBriefSchema,
   calculateBriefReadiness,
   getWorkflowSteps,
@@ -29,6 +31,10 @@ import {
   type ProviderKind,
   type ProviderRoute,
   type LongContextPacket,
+  type LibrarySnapshot,
+  type PromoteSeriesConceptInput,
+  type SeriesConceptMessage,
+  type SeriesConceptSnapshot,
   type StoryBrief,
   type UpdateBookInput,
   type UpdateChapterInput,
@@ -41,6 +47,7 @@ import {
   type WorkflowStep
 } from '@core/index'
 import { buildLongContextPacket, estimateTokens, rebudgetLongContextPacket, summarizeChapter } from './context'
+import { createOutlineProposal } from './director'
 import type { ProviderRequestEvent } from './providers'
 import { CURRENT_SCHEMA_VERSION, createMigrationBackup } from './recovery'
 
@@ -610,6 +617,61 @@ export class NovelDatabase {
         throw error
       }
     }
+
+    const seriesConceptMigration = this.db.prepare('SELECT 1 AS value FROM schema_migrations WHERE version = 8').get()
+    if (!seriesConceptMigration) {
+      this.db.exec('BEGIN IMMEDIATE')
+      try {
+        this.db.exec(`
+          CREATE TABLE IF NOT EXISTS series_concept_messages (
+            id TEXT PRIMARY KEY,
+            series_id TEXT NOT NULL REFERENCES series(id) ON DELETE CASCADE,
+            role TEXT NOT NULL,
+            content TEXT NOT NULL,
+            created_at TEXT NOT NULL
+          ) STRICT;
+          CREATE INDEX IF NOT EXISTS series_concept_messages_series_created_idx
+            ON series_concept_messages(series_id, created_at);
+
+          CREATE TABLE IF NOT EXISTS series_concept_brief_versions (
+            id TEXT PRIMARY KEY,
+            series_id TEXT NOT NULL REFERENCES series(id) ON DELETE CASCADE,
+            version INTEGER NOT NULL,
+            data_json TEXT NOT NULL,
+            status TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            UNIQUE(series_id, version)
+          ) STRICT;
+          CREATE INDEX IF NOT EXISTS series_concept_briefs_series_version_idx
+            ON series_concept_brief_versions(series_id, version DESC);
+
+          CREATE TABLE IF NOT EXISTS series_concept_promotions (
+            series_id TEXT PRIMARY KEY REFERENCES series(id) ON DELETE CASCADE,
+            book_id TEXT NOT NULL UNIQUE REFERENCES books(id),
+            source_brief_version_id TEXT NOT NULL REFERENCES series_concept_brief_versions(id),
+            promoted_at TEXT NOT NULL
+          ) STRICT;
+        `)
+        const emptyBrief = JSON.stringify(StoryBriefSchema.parse({}))
+        const emptySeries = this.db.prepare(`
+          SELECT s.id FROM series s
+          WHERE s.archived_at IS NULL
+            AND NOT EXISTS (SELECT 1 FROM books b WHERE b.series_id = s.id AND b.archived_at IS NULL)
+            AND NOT EXISTS (SELECT 1 FROM series_concept_brief_versions v WHERE v.series_id = s.id)
+        `).all() as SqlRow[]
+        const insertConcept = this.db.prepare(`
+          INSERT INTO series_concept_brief_versions(id, series_id, version, data_json, status, created_at)
+          VALUES(?, ?, 1, ?, 'draft', ?)
+        `)
+        const now = new Date().toISOString()
+        emptySeries.forEach((row) => insertConcept.run(randomUUID(), String(row.id), emptyBrief, now))
+        this.db.prepare('INSERT INTO schema_migrations(version, applied_at) VALUES(8, ?)').run(now)
+        this.db.exec('COMMIT')
+      } catch (error) {
+        this.db.exec('ROLLBACK')
+        throw error
+      }
+    }
   }
 
   private addColumnIfMissing(table: string, column: string, definition: string): void {
@@ -624,6 +686,10 @@ export class NovelDatabase {
       INSERT INTO app_settings(key, value, updated_at) VALUES(?, ?, ?)
       ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at
     `).run(key, value, new Date().toISOString())
+  }
+
+  private clearSetting(key: string): void {
+    this.db.prepare('DELETE FROM app_settings WHERE key = ?').run(key)
   }
 
   private seedDemoWorkspace(): void {
@@ -715,6 +781,12 @@ export class NovelDatabase {
   }
 
   getActiveBookId(): string {
+    const active = this.getActiveBookIdOrNull()
+    if (active) return active
+    throw new Error('Không tìm thấy dự án đang hoạt động.')
+  }
+
+  getActiveBookIdOrNull(): string | null {
     const selected = this.db.prepare(`
       SELECT b.id FROM app_settings s
       JOIN books b ON b.id = s.value
@@ -727,7 +799,10 @@ export class NovelDatabase {
       WHERE b.archived_at IS NULL AND s.archived_at IS NULL
       ORDER BY b.updated_at DESC LIMIT 1
     `).get() as SqlRow | undefined
-    if (!row) throw new Error('Không tìm thấy dự án đang hoạt động.')
+    if (!row) {
+      this.clearSetting('active_book_id')
+      return null
+    }
     this.setSetting('active_book_id', String(row.id))
     return String(row.id)
   }
@@ -749,6 +824,10 @@ export class NovelDatabase {
       this.db.prepare(`
         INSERT INTO series(id, name, description, created_at, updated_at) VALUES(?, ?, ?, ?, ?)
       `).run(id, input.name, input.description, now, now)
+      this.db.prepare(`
+        INSERT INTO series_concept_brief_versions(id, series_id, version, data_json, status, created_at)
+        VALUES(?, ?, 1, ?, 'draft', ?)
+      `).run(randomUUID(), id, JSON.stringify(StoryBriefSchema.parse({})), now)
       this.writeAudit('series.created', id, input)
       this.db.exec('COMMIT')
       return id
@@ -770,15 +849,15 @@ export class NovelDatabase {
   archiveSeries(id: string): void {
     const series = this.db.prepare('SELECT id FROM series WHERE id = ? AND archived_at IS NULL').get(id)
     if (!series) throw new Error('Series không tồn tại hoặc đã được lưu trữ.')
-    const activeBookId = this.getActiveBookId()
-    const activeInSeries = this.db.prepare('SELECT 1 AS value FROM books WHERE id = ? AND series_id = ?').get(activeBookId, id)
+    const activeBookId = this.getActiveBookIdOrNull()
+    const activeInSeries = activeBookId
+      ? this.db.prepare('SELECT 1 AS value FROM books WHERE id = ? AND series_id = ?').get(activeBookId, id)
+      : undefined
     const fallback = this.db.prepare(`
       SELECT b.id FROM books b JOIN series s ON s.id = b.series_id
       WHERE b.series_id <> ? AND b.archived_at IS NULL AND s.archived_at IS NULL
       ORDER BY b.updated_at DESC LIMIT 1
     `).get(id) as SqlRow | undefined
-    if (activeInSeries && !fallback) throw new Error('Cần ít nhất một sách hoạt động trước khi lưu trữ series này.')
-
     const now = new Date().toISOString()
     this.db.exec('BEGIN IMMEDIATE')
     try {
@@ -789,6 +868,7 @@ export class NovelDatabase {
       this.db.prepare('UPDATE books SET archived_at = ?, updated_at = ? WHERE series_id = ? AND archived_at IS NULL').run(now, now, id)
       this.db.prepare('UPDATE series SET archived_at = ?, updated_at = ? WHERE id = ?').run(now, now, id)
       if (activeInSeries && fallback) this.setSetting('active_book_id', String(fallback.id))
+      if (activeInSeries && !fallback) this.clearSetting('active_book_id')
       this.writeAudit('series.archived', id, { fallbackBookId: fallback ? String(fallback.id) : null })
       this.db.exec('COMMIT')
     } catch (error) {
@@ -844,19 +924,260 @@ export class NovelDatabase {
       WHERE b.id <> ? AND b.archived_at IS NULL AND s.archived_at IS NULL
       ORDER BY b.updated_at DESC LIMIT 1
     `).get(id) as SqlRow | undefined
-    if (!fallback) throw new Error('Cần ít nhất một sách hoạt động trước khi lưu trữ sách này.')
+    const activeBookId = this.getActiveBookIdOrNull()
     const now = new Date().toISOString()
     this.db.exec('BEGIN IMMEDIATE')
     try {
       this.db.prepare('UPDATE chapters SET archived_at = ?, updated_at = ? WHERE book_id = ? AND archived_at IS NULL').run(now, now, id)
       this.db.prepare('UPDATE books SET archived_at = ?, updated_at = ? WHERE id = ?').run(now, now, id)
       this.db.prepare('UPDATE series SET updated_at = ? WHERE id = ?').run(now, String(book.series_id))
-      if (this.getActiveBookId() === id) this.setSetting('active_book_id', String(fallback.id))
-      this.writeAudit('book.archived', id, { fallbackBookId: String(fallback.id) })
+      if (activeBookId === id && fallback) this.setSetting('active_book_id', String(fallback.id))
+      if (activeBookId === id && !fallback) this.clearSetting('active_book_id')
+      this.writeAudit('book.archived', id, { fallbackBookId: fallback ? String(fallback.id) : null })
       this.db.exec('COMMIT')
     } catch (error) {
       this.db.exec('ROLLBACK')
       throw error
+    }
+  }
+
+  getLibrarySnapshot(): LibrarySnapshot {
+    const series = (this.db.prepare(`
+      SELECT s.*, COUNT(b.id) AS book_count, p.book_id AS promoted_book_id
+      FROM series s
+      LEFT JOIN books b ON b.series_id = s.id AND b.archived_at IS NULL
+      LEFT JOIN series_concept_promotions p ON p.series_id = s.id
+      WHERE s.archived_at IS NULL
+      GROUP BY s.id
+      ORDER BY s.updated_at DESC
+    `).all() as SqlRow[]).map((row) => {
+      const concept = this.latestSeriesConceptBrief(String(row.id))
+      return {
+        id: String(row.id),
+        name: String(row.name),
+        description: String(row.description),
+        bookCount: Number(row.book_count),
+        updatedAt: String(row.updated_at),
+        conceptReadiness: concept ? calculateBriefReadiness(concept.brief) : 0,
+        conceptVersionId: concept?.id ?? null,
+        promotedBookId: row.promoted_book_id === null || row.promoted_book_id === undefined ? null : String(row.promoted_book_id)
+      }
+    })
+    const books = (this.db.prepare(`
+      SELECT b.* FROM books b JOIN series s ON s.id = b.series_id
+      WHERE b.archived_at IS NULL AND s.archived_at IS NULL
+      ORDER BY b.updated_at DESC
+    `).all() as SqlRow[]).map(mapBook)
+
+    return LibrarySnapshotSchema.parse({
+      series,
+      books,
+      activeBookId: this.getActiveBookIdOrNull(),
+      roles: DEFAULT_ROLES.map((role) => ({
+        ...role,
+        state: role.id === 'director' ? 'ready' as const : 'waiting' as const
+      })),
+      database: this.databaseStatus()
+    })
+  }
+
+  getSeriesConceptSnapshot(seriesId: string): SeriesConceptSnapshot {
+    this.ensureSeriesConcept(seriesId)
+    const seriesRow = this.db.prepare(`
+      SELECT s.*, COUNT(b.id) AS book_count, p.book_id AS promoted_book_id
+      FROM series s
+      LEFT JOIN books b ON b.series_id = s.id AND b.archived_at IS NULL
+      LEFT JOIN series_concept_promotions p ON p.series_id = s.id
+      WHERE s.id = ? AND s.archived_at IS NULL
+      GROUP BY s.id
+    `).get(seriesId) as SqlRow | undefined
+    if (!seriesRow) throw new Error('Series không tồn tại hoặc đã được lưu trữ.')
+    const concept = this.latestSeriesConceptBrief(seriesId)
+    if (!concept) throw new Error('Không thể khởi tạo định hướng cho Series.')
+    const messages = (this.db.prepare(`
+      SELECT * FROM series_concept_messages WHERE series_id = ? ORDER BY created_at ASC, rowid ASC
+    `).all(seriesId) as SqlRow[]).map(mapSeriesConceptMessage)
+    const briefFields = buildBriefFields(concept.brief)
+    const readiness = calculateBriefReadiness(concept.brief)
+
+    return SeriesConceptSnapshotSchema.parse({
+      series: {
+        id: String(seriesRow.id),
+        name: String(seriesRow.name),
+        description: String(seriesRow.description),
+        bookCount: Number(seriesRow.book_count),
+        updatedAt: String(seriesRow.updated_at),
+        conceptReadiness: readiness,
+        conceptVersionId: concept.id,
+        promotedBookId: seriesRow.promoted_book_id === null || seriesRow.promoted_book_id === undefined ? null : String(seriesRow.promoted_book_id)
+      },
+      messages,
+      brief: concept.brief,
+      briefFields,
+      readiness,
+      conceptVersionId: concept.id,
+      promotedBookId: seriesRow.promoted_book_id === null || seriesRow.promoted_book_id === undefined ? null : String(seriesRow.promoted_book_id)
+    })
+  }
+
+  appendSeriesConceptMessage(seriesId: string, role: SeriesConceptMessage['role'], content: string): SeriesConceptMessage {
+    this.assertSeriesConceptWritable(seriesId)
+    const message: SeriesConceptMessage = {
+      id: randomUUID(),
+      seriesId,
+      role,
+      content,
+      createdAt: new Date().toISOString()
+    }
+    this.db.prepare(`
+      INSERT INTO series_concept_messages(id, series_id, role, content, created_at) VALUES(?, ?, ?, ?, ?)
+    `).run(message.id, seriesId, role, content, message.createdAt)
+    return message
+  }
+
+  getLatestSeriesConceptBrief(seriesId: string): StoryBrief {
+    this.ensureSeriesConcept(seriesId)
+    return this.latestSeriesConceptBrief(seriesId)?.brief ?? StoryBriefSchema.parse({})
+  }
+
+  saveSeriesConceptBrief(seriesId: string, brief: StoryBrief, status: 'draft' | 'ready'): string {
+    this.assertSeriesConceptWritable(seriesId)
+    const latest = this.db.prepare(`
+      SELECT COALESCE(MAX(version), 0) AS version FROM series_concept_brief_versions WHERE series_id = ?
+    `).get(seriesId) as SqlRow
+    const id = randomUUID()
+    const now = new Date().toISOString()
+    this.db.prepare(`
+      INSERT INTO series_concept_brief_versions(id, series_id, version, data_json, status, created_at)
+      VALUES(?, ?, ?, ?, ?, ?)
+    `).run(id, seriesId, Number(latest.version) + 1, JSON.stringify(StoryBriefSchema.parse(brief)), status, now)
+    this.db.prepare('UPDATE series SET updated_at = ? WHERE id = ?').run(now, seriesId)
+    this.writeAudit('series.concept.updated', seriesId, { briefVersionId: id, status })
+    return id
+  }
+
+  promoteSeriesConcept(input: PromoteSeriesConceptInput): string {
+    const series = this.db.prepare('SELECT id, name FROM series WHERE id = ? AND archived_at IS NULL').get(input.seriesId) as SqlRow | undefined
+    if (!series) throw new Error('Series không tồn tại hoặc đã được lưu trữ.')
+    const existingBook = this.db.prepare('SELECT id FROM books WHERE series_id = ? AND archived_at IS NULL LIMIT 1').get(input.seriesId)
+    if (existingBook) throw new Error('Series này đã có sách. Chỉ có thể chuyển định hướng thành Tập 1 một lần.')
+    const promoted = this.db.prepare('SELECT book_id FROM series_concept_promotions WHERE series_id = ?').get(input.seriesId)
+    if (promoted) throw new Error('Định hướng Series này đã được chuyển thành Tập 1.')
+    const concept = this.latestSeriesConceptBrief(input.seriesId)
+    if (!concept || concept.id !== input.conceptVersionId) {
+      throw new Error('Định hướng đã thay đổi. Hãy mở lại bản xem trước trước khi tạo Tập 1.')
+    }
+
+    const finalBrief = StoryBriefSchema.parse({
+      ...concept.brief,
+      genres: concept.brief.genres.length > 0
+        ? concept.brief.genres
+        : input.genre.split(/[·,;]/).map((item) => item.trim()).filter(Boolean),
+      targetChapters: input.targetChapters
+    })
+    const readiness = calculateBriefReadiness(finalBrief)
+    const bookId = randomUUID()
+    const now = new Date().toISOString()
+    this.db.exec('BEGIN IMMEDIATE')
+    try {
+      this.db.prepare(`
+        INSERT INTO books(id, series_id, title, genre, status, target_chapters, approved_chapters, created_at, updated_at)
+        VALUES(?, ?, ?, ?, ?, ?, 0, ?, ?)
+      `).run(bookId, input.seriesId, input.title, input.genre, input.status, input.targetChapters, now, now)
+      this.db.prepare(`
+        INSERT INTO brief_versions(id, book_id, version, data_json, status, created_at)
+        VALUES(?, ?, 1, ?, ?, ?)
+      `).run(randomUUID(), bookId, JSON.stringify(finalBrief), readiness === 100 ? 'ready' : 'draft', now)
+
+      const sourceMessages = this.db.prepare(`
+        SELECT role, content, created_at FROM series_concept_messages
+        WHERE series_id = ? ORDER BY created_at ASC, rowid ASC
+      `).all(input.seriesId) as SqlRow[]
+      const insertMessage = this.db.prepare(`
+        INSERT INTO conversations(id, book_id, role, content, created_at) VALUES(?, ?, ?, ?, ?)
+      `)
+      sourceMessages.forEach((message) => insertMessage.run(
+        randomUUID(),
+        bookId,
+        String(message.role),
+        String(message.content),
+        String(message.created_at)
+      ))
+      insertMessage.run(
+        randomUUID(),
+        bookId,
+        'system',
+        `Định hướng cấp Series “${String(series.name)}” đã được chuyển thành Tập 1. Cuộc trò chuyện tiếp tục trong sách này.`,
+        now
+      )
+
+      if (readiness === 100) {
+        this.db.prepare(`
+          INSERT INTO outline_versions(id, book_id, version, data_json, status, created_at)
+          VALUES(?, ?, 1, ?, 'proposal', ?)
+        `).run(randomUUID(), bookId, JSON.stringify(createOutlineProposal(finalBrief)), now)
+      }
+      this.db.prepare(`
+        INSERT INTO series_concept_promotions(series_id, book_id, source_brief_version_id, promoted_at)
+        VALUES(?, ?, ?, ?)
+      `).run(input.seriesId, bookId, concept.id, now)
+      this.db.prepare('UPDATE series SET updated_at = ? WHERE id = ?').run(now, input.seriesId)
+      this.setSetting('active_book_id', bookId)
+      this.writeAudit('series.concept.promoted', input.seriesId, {
+        bookId,
+        sourceBriefVersionId: concept.id,
+        readiness
+      })
+      this.db.exec('COMMIT')
+      return bookId
+    } catch (error) {
+      this.db.exec('ROLLBACK')
+      throw error
+    }
+  }
+
+  private ensureSeriesConcept(seriesId: string): void {
+    const series = this.db.prepare('SELECT id FROM series WHERE id = ? AND archived_at IS NULL').get(seriesId)
+    if (!series) throw new Error('Series không tồn tại hoặc đã được lưu trữ.')
+    const existing = this.db.prepare('SELECT id FROM series_concept_brief_versions WHERE series_id = ? LIMIT 1').get(seriesId)
+    if (existing) return
+    this.db.prepare(`
+      INSERT INTO series_concept_brief_versions(id, series_id, version, data_json, status, created_at)
+      VALUES(?, ?, 1, ?, 'draft', ?)
+    `).run(randomUUID(), seriesId, JSON.stringify(StoryBriefSchema.parse({})), new Date().toISOString())
+  }
+
+  private assertSeriesConceptWritable(seriesId: string): void {
+    this.ensureSeriesConcept(seriesId)
+    const book = this.db.prepare('SELECT id FROM books WHERE series_id = ? AND archived_at IS NULL LIMIT 1').get(seriesId)
+    const promotion = this.db.prepare('SELECT book_id FROM series_concept_promotions WHERE series_id = ?').get(seriesId)
+    if (book || promotion) throw new Error('Series đã có Tập 1. Hãy tiếp tục trò chuyện trong sách đang mở.')
+  }
+
+  private latestSeriesConceptBrief(seriesId: string): { id: string; brief: StoryBrief } | null {
+    const row = this.db.prepare(`
+      SELECT id, data_json FROM series_concept_brief_versions
+      WHERE series_id = ? ORDER BY version DESC LIMIT 1
+    `).get(seriesId) as SqlRow | undefined
+    if (!row) return null
+    return {
+      id: String(row.id),
+      brief: parseJsonColumn<StoryBrief>(
+        row.data_json,
+        StoryBriefSchema.parse({}),
+        { table: 'series_concept_brief_versions', column: 'data_json', rowId: String(row.id) },
+        (value) => StoryBriefSchema.safeParse(value).success
+      ).value
+    }
+  }
+
+  private databaseStatus(): BootstrapSnapshot['database'] {
+    const sqliteVersion = this.db.prepare('SELECT sqlite_version() AS version').get() as SqlRow
+    return {
+      version: String(sqliteVersion.version),
+      fts5: Boolean(this.db.prepare("SELECT 1 AS value FROM pragma_module_list WHERE name = 'fts5'").get()),
+      path: this.path,
+      schemaVersion: this.readSchemaVersion()
     }
   }
 
@@ -2295,6 +2616,30 @@ function mapBook(row: SqlRow): Book {
     approvedChapters: Number(row.approved_chapters),
     updatedAt: String(row.updated_at)
   }
+}
+
+function mapSeriesConceptMessage(row: SqlRow): SeriesConceptMessage {
+  return {
+    id: String(row.id),
+    seriesId: String(row.series_id),
+    role: String(row.role) as SeriesConceptMessage['role'],
+    content: String(row.content),
+    createdAt: String(row.created_at)
+  }
+}
+
+function buildBriefFields(brief: StoryBrief): BootstrapSnapshot['briefFields'] {
+  return Object.entries(BRIEF_FIELD_LABELS).map(([key, label]) => {
+    const typedKey = key as keyof StoryBrief
+    const preview = toValuePreview(brief[typedKey])
+    return {
+      key: typedKey,
+      label,
+      status: preview === 'Chưa xác định' ? 'unknown' as const : 'confirmed' as const,
+      valuePreview: preview,
+      sourceMessageId: null
+    }
+  })
 }
 
 function mapChapter(row: SqlRow): Chapter {
