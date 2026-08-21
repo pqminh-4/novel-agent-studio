@@ -129,26 +129,31 @@ describe('khôi phục dữ liệu P0.5', () => {
     reopened.close()
   })
 
-  it('tự tạo migration backup v6 trước khi nâng schema v7', () => {
+  it('tự tạo migration backup trước khi nâng lên schema hiện tại', () => {
     const directory = temporaryDirectory('novel-agent-migration-backup-')
     const initial = new NovelDatabase(directory)
-    setActiveBookTitle(initial, 'Dữ liệu trước migration v7')
+    setActiveBookTitle(initial, 'Dữ liệu trước migration v8')
     initial.close()
 
     const sqlite = new DatabaseSync(join(directory, 'novel-agent.sqlite'))
-    sqlite.exec('DELETE FROM schema_migrations WHERE version = 7; DROP TABLE recovery_events;')
+    sqlite.exec(`
+      DELETE FROM schema_migrations WHERE version = 8;
+      DROP TABLE series_concept_promotions;
+      DROP TABLE series_concept_messages;
+      DROP TABLE series_concept_brief_versions;
+    `)
     sqlite.close()
 
     const migrated = new NovelDatabase(directory)
-    expect(migrated.getSchemaVersion()).toBe(7)
-    expect(migrated.getBootstrapSnapshot().activeBook.title).toBe('Dữ liệu trước migration v7')
+    expect(migrated.getSchemaVersion()).toBe(CURRENT_SCHEMA_VERSION)
+    expect(migrated.getBootstrapSnapshot().activeBook.title).toBe('Dữ liệu trước migration v8')
     migrated.close()
 
     const migrationDirectory = join(directory, 'recovery', 'migrations')
     const backups = readdirSync(migrationDirectory).filter((name) => name.endsWith('.sqlite'))
     expect(backups).toHaveLength(1)
     const migrationBackup = inspectSqliteDatabase(join(migrationDirectory, backups[0]), 'migration')
-    expect(migrationBackup).toMatchObject({ schemaVersion: 6, integrity: 'ok' })
+    expect(migrationBackup).toMatchObject({ schemaVersion: 7, integrity: 'ok' })
 
     const verified = new DatabaseSync(join(directory, 'novel-agent.sqlite'), { readOnly: true })
     expect(verified.prepare("SELECT COUNT(*) AS count FROM recovery_events WHERE event_type = 'migration_backup'").get()).toEqual({ count: 1 })

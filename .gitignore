@@ -2,6 +2,9 @@ node_modules/
 out/
 release/
 coverage/
+.playwright-results/
+playwright-report/
+test-results/
 .vite/
 .pnpm-store/
 *.tsbuildinfo

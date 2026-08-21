@@ -29,7 +29,9 @@ import {
   UpdateSeriesInputSchema,
   WorkflowRunInputSchema,
   ReviewWorkflowInputSchema,
+  PromoteSeriesConceptInputSchema,
   ProviderRouteSchema,
+  SeriesConceptMessageInputSchema,
   type RuntimeResponse
 } from '@core/index'
 
@@ -104,6 +106,71 @@ async function handleRequest(channel: string, payload: unknown): Promise<unknown
   switch (channel) {
     case 'app:bootstrap': {
       const bookId = readOptionalBookId(payload)
+      return database.getBootstrapSnapshot(bookId)
+    }
+    case 'library:bootstrap':
+      return database.getLibrarySnapshot()
+    case 'library:create-series': {
+      const seriesId = database.createSeries(CreateSeriesInputSchema.parse(payload))
+      return { snapshot: database.getLibrarySnapshot(), seriesId }
+    }
+    case 'library:update-series':
+      database.updateSeries(UpdateSeriesInputSchema.parse(payload))
+      return database.getLibrarySnapshot()
+    case 'library:archive-series': {
+      const input = ArchiveSeriesInputSchema.parse(payload)
+      database.archiveSeries(input.id)
+      return database.getLibrarySnapshot()
+    }
+    case 'library:create-book': {
+      const bookId = database.createBook(CreateBookInputSchema.parse(payload))
+      return { snapshot: database.getLibrarySnapshot(), bookId }
+    }
+    case 'library:update-book':
+      database.updateBook(UpdateBookInputSchema.parse(payload))
+      return database.getLibrarySnapshot()
+    case 'library:archive-book': {
+      const input = ArchiveBookInputSchema.parse(payload)
+      database.archiveBook(input.id)
+      return database.getLibrarySnapshot()
+    }
+    case 'library:open-book': {
+      const input = SwitchBookInputSchema.parse(payload)
+      database.switchBook(input.bookId)
+      return database.getBootstrapSnapshot(input.bookId)
+    }
+    case 'series-concept:bootstrap': {
+      const input = ArchiveSeriesInputSchema.parse(payload)
+      return database.getSeriesConceptSnapshot(input.id)
+    }
+    case 'series-concept:message': {
+      const input = SeriesConceptMessageInputSchema.parse(payload)
+      const providerSecret = readProviderSecret(payload)
+      database.appendSeriesConceptMessage(input.seriesId, 'user', input.content)
+      const currentBrief = database.getLatestSeriesConceptBrief(input.seriesId)
+      const turn = runOfflineDirectorTurn(currentBrief, input.content)
+      database.saveSeriesConceptBrief(input.seriesId, turn.brief, turn.outlineReady ? 'ready' : 'draft')
+      let reply = turn.outlineReady
+        ? 'Định hướng cho Tập 1 đã đủ các quyết định nền tảng. Bạn có thể mở bản xem trước, chỉnh tên sách và số chương trước khi tạo.'
+        : turn.reply
+      if (providerSecret) {
+        try {
+          reply = await generateDirectorReply(providerSecret, {
+            brief: turn.brief,
+            userMessage: input.content,
+            fallbackReply: reply,
+            readiness: turn.readiness
+          })
+        } catch {
+          database.appendSeriesConceptMessage(input.seriesId, 'system', 'Provider đang không phản hồi; Đạo diễn đã tiếp tục bằng chế độ cục bộ an toàn.')
+        }
+      }
+      database.appendSeriesConceptMessage(input.seriesId, 'director', reply)
+      return database.getSeriesConceptSnapshot(input.seriesId)
+    }
+    case 'series-concept:promote': {
+      const input = PromoteSeriesConceptInputSchema.parse(payload)
+      const bookId = database.promoteSeriesConcept(input)
       return database.getBootstrapSnapshot(bookId)
     }
     case 'workspace:create-series': {

@@ -4,7 +4,9 @@ import {
   CreateChapterInputSchema,
   DirectorMessageInputSchema,
   OutlineVersionInputSchema,
+  PromoteSeriesConceptInputSchema,
   SaveChapterInputSchema,
+  SeriesConceptMessageInputSchema,
   UpdateStateSchema
 } from '@core/index'
 
@@ -13,6 +15,8 @@ describe('xác thực yêu cầu runtime P0.1', () => {
     expect(CreateBookInputSchema.safeParse({ seriesId: '', title: '', targetChapters: 0 }).success).toBe(false)
     expect(CreateChapterInputSchema.safeParse({ bookId: 'book-1', title: '' }).success).toBe(false)
     expect(DirectorMessageInputSchema.safeParse({ bookId: 'book-1', content: ' '.repeat(3) }).success).toBe(false)
+    expect(SeriesConceptMessageInputSchema.safeParse({ seriesId: '', content: 'Ý tưởng' }).success).toBe(false)
+    expect(PromoteSeriesConceptInputSchema.safeParse({ seriesId: 'series-1', conceptVersionId: '', title: 'Tập 1', targetChapters: 24 }).success).toBe(false)
     expect(OutlineVersionInputSchema.safeParse({ versionId: '' }).success).toBe(false)
     expect(SaveChapterInputSchema.safeParse({ chapterId: 'chapter-1', content: {}, wordCount: -1 }).success).toBe(false)
   })

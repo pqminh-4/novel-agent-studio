@@ -4,6 +4,7 @@ import { join } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
 import { afterEach, describe, expect, it } from 'vitest'
 import { createOutlineProposal, NovelDatabase, runOfflineDirectorTurn } from '@infra/index'
+import { StoryBriefSchema } from '@core/index'
 
 const temporaryDirectories: string[] = []
 
@@ -133,12 +134,97 @@ describe('workspace P0.1', () => {
     sqlite.close()
   })
 
-  it('không cho lưu trữ sách hoạt động cuối cùng', () => {
+  it('cho lưu trữ sách hoạt động cuối cùng và vẫn mở được Thư viện', () => {
     const directory = mkdtempSync(join(tmpdir(), 'novel-agent-last-book-'))
     temporaryDirectories.push(directory)
     const database = new NovelDatabase(directory)
-    expect(() => database.archiveBook(database.getActiveBookId())).toThrow('Cần ít nhất một sách hoạt động')
-    expect(database.getBootstrapSnapshot().books).toHaveLength(1)
+    database.archiveBook(database.getActiveBookId())
+    expect(database.getLibrarySnapshot()).toMatchObject({ books: [], activeBookId: null })
+    expect(() => database.getActiveBookId()).toThrow('Không tìm thấy dự án đang hoạt động')
+    database.close()
+  })
+
+  it('mở được Series rỗng và giữ chat Đạo diễn sau khi khởi động lại', () => {
+    const directory = mkdtempSync(join(tmpdir(), 'novel-agent-series-concept-'))
+    temporaryDirectories.push(directory)
+    const database = new NovelDatabase(directory)
+    const seriesId = database.createSeries({ name: 'Khởi nguyên Sao Băng', description: 'Series chưa có tập.' })
+    database.appendSeriesConceptMessage(seriesId, 'user', 'Một thành phố chỉ xuất hiện khi có sao băng.')
+    const library = database.getLibrarySnapshot()
+    const concept = database.getSeriesConceptSnapshot(seriesId)
+    database.close()
+
+    expect(library.series.find((series) => series.id === seriesId)).toMatchObject({ bookCount: 0, conceptReadiness: 10 })
+    expect(concept.messages).toHaveLength(1)
+    expect(concept.conceptVersionId).toBeTruthy()
+
+    const reopened = new NovelDatabase(directory)
+    expect(reopened.getSeriesConceptSnapshot(seriesId).messages[0].content).toContain('sao băng')
+    reopened.close()
+  })
+
+  it('chuyển concept thành Tập 1 nguyên tử, giữ chat và tạo outline khi brief đủ', () => {
+    const directory = mkdtempSync(join(tmpdir(), 'novel-agent-series-promotion-'))
+    temporaryDirectories.push(directory)
+    const database = new NovelDatabase(directory)
+    const seriesId = database.createSeries({ name: 'Biển Trời Vỡ', description: 'Dự án mới.' })
+    database.appendSeriesConceptMessage(seriesId, 'user', 'Tôi muốn một chuyến phiêu lưu trên biển mây.')
+    database.appendSeriesConceptMessage(seriesId, 'director', 'Ai là người buộc phải rời nhà?')
+    database.saveSeriesConceptBrief(seriesId, StoryBriefSchema.parse({
+      premise: 'Một hoa tiêu phải tìm lại hòn đảo đã rơi khỏi bầu trời.',
+      genres: ['Kỳ ảo'],
+      audience: 'Độc giả trưởng thành',
+      setting: 'Quần đảo nổi trên biển mây',
+      protagonists: ['Linh, hoa tiêu trẻ'],
+      conflict: 'Mỗi tọa độ được tìm thấy làm cô quên một người thân.',
+      pointOfView: 'Ngôi ba giới hạn',
+      tone: 'Phiêu lưu và u hoài',
+      endingDirection: 'Chiến thắng có đánh đổi',
+      targetChapters: 12
+    }), 'ready')
+    const concept = database.getSeriesConceptSnapshot(seriesId)
+    const bookId = database.promoteSeriesConcept({
+      seriesId,
+      conceptVersionId: concept.conceptVersionId,
+      title: 'Hải đồ cuối trời',
+      genre: 'Kỳ ảo',
+      status: 'planning',
+      targetChapters: 12
+    })
+    const book = database.getBootstrapSnapshot(bookId)
+
+    expect(book.messages.map((message) => message.role)).toEqual(['user', 'director', 'system'])
+    expect(book.messages[0].content).toContain('biển mây')
+    expect(book.readiness).toBe(100)
+    expect(book.outline).toHaveLength(12)
+    expect(() => database.promoteSeriesConcept({
+      seriesId,
+      conceptVersionId: concept.conceptVersionId,
+      title: 'Tập trùng',
+      genre: '',
+      status: 'planning',
+      targetChapters: 12
+    })).toThrow('đã có sách')
+    database.close()
+  })
+
+  it('từ chối promote bằng phiên bản concept đã cũ mà không tạo sách', () => {
+    const directory = mkdtempSync(join(tmpdir(), 'novel-agent-stale-promotion-'))
+    temporaryDirectories.push(directory)
+    const database = new NovelDatabase(directory)
+    const seriesId = database.createSeries({ name: 'Dòng Thời Gian', description: '' })
+    const staleVersion = database.getSeriesConceptSnapshot(seriesId).conceptVersionId
+    database.saveSeriesConceptBrief(seriesId, StoryBriefSchema.parse({ premise: 'Một ký ức bị đánh cắp.' }), 'draft')
+
+    expect(() => database.promoteSeriesConcept({
+      seriesId,
+      conceptVersionId: staleVersion,
+      title: 'Tập đầu',
+      genre: 'Bí ẩn',
+      status: 'planning',
+      targetChapters: 24
+    })).toThrow('Định hướng đã thay đổi')
+    expect(database.getLibrarySnapshot().series.find((series) => series.id === seriesId)?.bookCount).toBe(0)
     database.close()
   })
 

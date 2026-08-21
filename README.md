@@ -9,6 +9,7 @@
 - Provider BYOK gồm OpenAI, Anthropic, Google Gemini và Ollama. Provider được chọn chỉ được giải mã trong Electron main process rồi chuyển thẳng đến Application Runtime, không trả khóa về renderer.
 - Manuscript Studio dùng Tiptap, autosave có lịch sử phiên bản, SQLite WAL/FTS5 và migration bảo toàn dữ liệu.
 - Quản lý nhiều series/sách/chương với tạo, sửa, chuyển sách đang mở và lưu trữ mềm; dữ liệu lịch sử không bị xóa vật lý.
+- Dashboard Thư viện là màn hình khởi động, hiển thị toàn bộ Series/Sách và cho phép Series chưa có Tập 1 trò chuyện với Đạo diễn trước khi tạo sách.
 - Outline Studio có lịch sử phiên bản, duyệt đề xuất và khôi phục theo kiểu tạo phiên bản mới có liên kết nguồn, không ghi đè bản cũ.
 - Durable AI Workflow có ba preset Nhanh/Cân bằng/Chất lượng, routing provider/model theo vai trò, checkpoint sau từng vai, usage ledger và điều khiển tạm dừng, tiếp tục, hủy hoặc thử lại.
 - Job Tray và Review Center hiển thị tiến độ, token, chi phí, artifact theo từng checkpoint và cổng duyệt so sánh bản hiện tại với bản AI đề xuất.
@@ -49,6 +50,7 @@ pnpm package
 - Migration schema v5 thêm route cố định theo checkpoint, request ID, HTTP status, retry/backoff, billing state, cost provenance và usage theo attempt mà không xóa dữ liệu v4.
 - Migration schema v6 thêm chapter summary theo document version, chỉ mục context FTS5 và ngân sách context theo checkpoint; quá trình backfill không sửa bản thảo hoặc lịch sử phiên bản hiện hữu.
 - Migration schema v7 thêm nhật ký recovery. Trước mọi lần nâng schema cũ, ứng dụng tạo một SQLite snapshot toàn vẹn trong `data/recovery/migrations` rồi mới chạy migration.
+- Migration schema v8 thêm brief, hội thoại và dấu vết promotion cấp Series; khi tạo Tập 1, brief cùng timeline chat được chuyển trong một transaction và dữ liệu nguồn vẫn được giữ để audit.
 - API key được bảo vệ bằng Windows DPAPI thông qua Electron `safeStorage`.
 - Không đưa khóa bí mật vào bản export, log hoặc repository.
 - Nếu provider đã chọn không phản hồi, Đạo diễn thông báo và quay về chế độ cục bộ để không làm gián đoạn dữ liệu.
@@ -66,9 +68,9 @@ pnpm typecheck
 pnpm test
 
 # Commit thay đổi rồi tạo tag đúng package.json.version
-git tag v0.1.6
+git tag v0.1.9
 git push origin master
-git push origin v0.1.6
+git push origin v0.1.9
 ```
 
 Có thể chạy lại release cho một tag đã tồn tại từ GitHub Actions bằng `workflow_dispatch`. Workflow dùng `GITHUB_TOKEN`, không cần lưu token trong repository. Mỗi release phải chứa installer NSIS x64, `latest.yml`, blockmap, SBOM CycloneDX và `SHA256SUMS.txt`; đây là các file cần thiết để `electron-updater` kiểm tra và tải cập nhật. Ứng dụng chỉ kiểm tra trong bản đã đóng gói, không tự tải hoặc tự cài, và sẽ hỏi lại trước khi khởi động lại khi còn workflow đang chạy.
@@ -79,6 +81,14 @@ Có thể chạy lại release cho một tag đã tồn tại từ GitHub Action
 ## Trạng thái ký mã
 
 Installer phát triển hiện chưa có chứng thư Authenticode. Windows SmartScreen có thể cảnh báo cho tới khi binary được ký bằng chứng thư tin cậy; không được coi log `signtool.exe` của electron-builder là bằng chứng đã ký.
+
+## Phiên bản 0.1.9
+
+- Thêm Dashboard Thư viện làm màn hình mở đầu, tìm kiếm và quản lý Series/Sách trên một bề mặt thống nhất.
+- Series rỗng có Studio Đạo diễn và Story Brief riêng; người dùng được xem trước rồi tạo Tập 1 mà không cần tạo chương trước.
+- Promotion sang Tập 1 giữ nguyên lịch sử chat, tạo dàn ý khi brief đạt 100% và mở thẳng tab Đạo diễn kể cả khi sách chưa có chương.
+- Cho phép lưu trữ sách hoạt động cuối cùng và quay về Dashboard, trong khi dữ liệu vẫn được lưu trữ mềm.
+- Bổ sung Playwright Electron ở 1440×900 và 1024×768 cho Dashboard, Series Studio, preview và handoff sang Tập 1.
 
 ## Sprint P0.3
 

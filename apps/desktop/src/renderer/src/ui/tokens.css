@@ -1,0 +1,92 @@
+/* Primitive: bảng màu và thang đo nền tảng của Storyworld Atlas. */
+:root {
+  --atlas-navy-1000: #03111c;
+  --atlas-navy-950: #061725;
+  --atlas-navy-900: #0a1d2c;
+  --atlas-navy-850: #0e2434;
+  --atlas-navy-800: #132b3b;
+  --atlas-slate-700: #294252;
+  --atlas-slate-500: #6f8794;
+  --atlas-slate-300: #a9bbc3;
+  --atlas-slate-100: #e3ebed;
+  --atlas-amber-500: #d9a83e;
+  --atlas-amber-300: #f1c867;
+  --atlas-emerald-500: #42b883;
+  --atlas-emerald-300: #75d4a9;
+  --atlas-cyan-500: #46a8c8;
+  --atlas-violet-500: #8a83d8;
+  --atlas-danger-500: #dc776d;
+  --atlas-paper-50: #f5efe3;
+  --atlas-paper-100: #ebe2d2;
+  --atlas-ink-900: #251f19;
+
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 20px;
+  --space-6: 24px;
+  --space-8: 32px;
+  --radius-sm: 7px;
+  --radius-md: 10px;
+  --radius-lg: 14px;
+  --radius-xl: 18px;
+
+  /* Semantic: ánh xạ primitive sang vai trò giao diện hiện hữu. */
+  color-scheme: dark;
+  --bg: var(--atlas-navy-1000);
+  --surface-0: var(--atlas-navy-950);
+  --surface-1: var(--atlas-navy-900);
+  --surface-2: var(--atlas-navy-850);
+  --surface-3: var(--atlas-navy-800);
+  --paper: var(--atlas-paper-50);
+  --paper-ink: var(--atlas-ink-900);
+  --line: rgba(161, 190, 201, 0.13);
+  --line-strong: rgba(161, 190, 201, 0.24);
+  --text: #eef3f3;
+  --muted: #9caeb6;
+  --muted-2: #6f8590;
+  --accent: var(--atlas-amber-500);
+  --accent-bright: var(--atlas-amber-300);
+  --accent-soft: rgba(217, 168, 62, 0.13);
+  --good: var(--atlas-emerald-500);
+  --danger: var(--atlas-danger-500);
+  --violet: var(--atlas-violet-500);
+  --blue: var(--atlas-cyan-500);
+  --atlas-canon: var(--atlas-emerald-500);
+  --atlas-workflow: var(--atlas-amber-500);
+  --focus-ring: rgba(241, 200, 103, 0.82);
+  --shadow-low: 0 12px 36px rgba(0, 5, 10, 0.22);
+  --shadow-high: 0 28px 90px rgba(0, 5, 10, 0.52);
+  --ease-out: cubic-bezier(0.23, 1, 0.32, 1);
+  --ease-in-out: cubic-bezier(0.77, 0, 0.175, 1);
+  --ease-drawer: cubic-bezier(0.32, 0.72, 0, 1);
+}
+
+:root[data-theme="light"] {
+  color-scheme: light;
+  --bg: #e9eef0;
+  --surface-0: #f7f9f9;
+  --surface-1: #eef3f4;
+  --surface-2: #e4ebed;
+  --surface-3: #d7e1e4;
+  --paper: #fffdf8;
+  --paper-ink: #27211b;
+  --line: rgba(28, 57, 69, 0.12);
+  --line-strong: rgba(28, 57, 69, 0.22);
+  --text: #142d39;
+  --muted: #536b75;
+  --muted-2: #7d9199;
+  --accent: #a86f08;
+  --accent-bright: #865605;
+  --accent-soft: rgba(168, 111, 8, 0.11);
+  --good: #197a54;
+  --danger: #b84f48;
+  --violet: #6860b2;
+  --blue: #257d9d;
+  --atlas-canon: #197a54;
+  --atlas-workflow: #a86f08;
+  --focus-ring: rgba(168, 111, 8, 0.7);
+  --shadow-low: 0 12px 34px rgba(30, 55, 64, 0.1);
+  --shadow-high: 0 28px 80px rgba(30, 55, 64, 0.2);
+}
