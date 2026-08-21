@@ -1740,10 +1740,12 @@ function UpdateSettings({ onToast }: { onToast: (message: string, tone?: Toast['
           <span style={{ width: `${state.percent}%` }} />
         </div>
       ) : null}
+      {state.status === 'installing' ? <p className="settings-note"><LoaderCircle size={14} className="spin" /> Đang đóng ứng dụng để cài đặt bản cập nhật. App sẽ tự mở lại sau khi cài xong.</p> : null}
+      {state.status === 'deferred' ? <p className="settings-note">{state.message} Có thể kiểm tra thủ công từ nút bên dưới.</p> : null}
       {state.status === 'error' ? <p className="settings-note"><CircleAlert size={14} /> {state.message}</p> : null}
       {state.status === 'available' && state.notes ? <p className="settings-note">{state.notes.slice(0, 400)}</p> : null}
       <div className="data-actions">
-        <button className="data-action" disabled={busy || state.status === 'downloading'} onClick={() => void run('check')}>
+        <button className="data-action" disabled={busy || state.status === 'downloading' || state.status === 'installing'} onClick={() => void run('check')}>
           <span><RefreshCw size={18} /></span>
           <div><strong>Kiểm tra cập nhật</strong><small>So sánh với bản phát hành mới nhất</small></div>
           {busy && state.status === 'checking' ? <LoaderCircle size={15} className="spin" /> : <ChevronRight size={15} />}
@@ -1781,6 +1783,8 @@ function describeUpdateState(state: UpdateState): string {
     case 'available': return `Có bản ${state.version}`
     case 'downloading': return `Đang tải ${state.percent}%`
     case 'downloaded': return `Sẵn sàng cài ${state.version}`
+    case 'installing': return `Đang cài bản ${state.version}`
+    case 'deferred': return 'Đã để sau trong phiên này'
     case 'current': return `Mới nhất · v${state.version}`
     case 'error': return 'Kiểm tra thất bại'
     case 'unsupported': return 'Chỉ có ở bản đóng gói'

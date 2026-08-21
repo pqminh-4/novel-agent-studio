@@ -310,7 +310,9 @@ export const UpdateStateSchema = z.discriminatedUnion('status', [
   z.object({ status: z.literal('available'), version: z.string(), notes: z.string().nullable() }),
   z.object({ status: z.literal('downloading'), version: z.string(), percent: z.number().min(0).max(100) }),
   z.object({ status: z.literal('downloaded'), version: z.string() }),
+  z.object({ status: z.literal('installing'), version: z.string() }),
   z.object({ status: z.literal('current'), version: z.string() }),
+  z.object({ status: z.literal('deferred'), message: z.string() }),
   z.object({ status: z.literal('error'), message: z.string() }),
   z.object({ status: z.literal('unsupported'), message: z.string() })
 ])

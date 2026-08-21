@@ -4,7 +4,8 @@ import {
   CreateChapterInputSchema,
   DirectorMessageInputSchema,
   OutlineVersionInputSchema,
-  SaveChapterInputSchema
+  SaveChapterInputSchema,
+  UpdateStateSchema
 } from '@core/index'
 
 describe('xác thực yêu cầu runtime P0.1', () => {
@@ -24,5 +25,10 @@ describe('xác thực yêu cầu runtime P0.1', () => {
       targetChapters: 24
     })
     expect(parsed).toMatchObject({ seriesId: 'series-1', title: 'Sách mới', genre: 'Kỳ ảo' })
+  })
+
+  it('chấp nhận trạng thái cập nhật đang cài và đã trì hoãn', () => {
+    expect(UpdateStateSchema.parse({ status: 'installing', version: '0.1.8' })).toEqual({ status: 'installing', version: '0.1.8' })
+    expect(UpdateStateSchema.parse({ status: 'deferred', message: 'Đã hoãn' })).toEqual({ status: 'deferred', message: 'Đã hoãn' })
   })
 })

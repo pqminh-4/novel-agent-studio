@@ -19,7 +19,7 @@ import { RuntimeBridge } from './runtime-bridge'
 import { CredentialVault, type ProviderConnectionInput } from './vault'
 import { exportBook, exportBookFormats, suggestFileName, validateFormats, type ExportFormat } from './exporters'
 import { Logger } from './logger'
-import { AppUpdater } from './updater'
+import { AppUpdater, DEFAULT_CHECK_INTERVAL_MS, DEFAULT_INITIAL_CHECK_DELAY_MS } from './updater'
 
 protocol.registerSchemesAsPrivileged([
   {
@@ -125,8 +125,13 @@ function installProcessHandlers(): void {
 }
 
 app.on('window-all-closed', () => {
+  updater?.dispose()
   void runtime?.stop()
   if (process.platform !== 'darwin') app.quit()
+})
+
+app.on('before-quit', () => {
+  updater?.dispose()
 })
 
 app.on('activate', () => {
@@ -159,9 +164,7 @@ function createWindow(): void {
   updater.attach(window, hasRunningWorkflow)
   window.once('ready-to-show', () => {
     window.show()
-    // Kiểm tra nền sau khi UI đã hiện, không chặn khởi động và không quấy rầy
-    // nếu mạng không sẵn sàng.
-    setTimeout(() => void updater.check({ silent: true }), 4_000)
+    updater.startAutoCheck(DEFAULT_INITIAL_CHECK_DELAY_MS, DEFAULT_CHECK_INTERVAL_MS)
   })
   window.on('closed', () => {
     if (mainWindow === window) mainWindow = null
